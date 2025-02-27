@@ -240,6 +240,7 @@ class DDPG:
                 self.actor.train()
 
                 next_state, reward, done, _, info = self.environment.step(action)
+
                 self.replay_buffer.append(
                     torch.tensor(state, dtype=torch.float32),
                     torch.tensor(action, dtype=torch.float32),
