@@ -117,10 +117,14 @@ class Reinforce:
         return action, log_prob
 
     def update_network(self, trajectory, log_probs):
-        returns = self.get_discounted_rewards(trajectory)
-        loss = -torch.sum(log_probs * returns)
-        print("Loss: ", loss)
-
+        log_probs = torch.stack(log_probs, dim=0)
+        returns = (
+            torch.tensor(self.get_discounted_rewards(trajectory), dtype=torch.float32)
+            .unsqueeze(1)
+            .expand(log_probs.shape[0], log_probs.shape[0])
+        )
+        loss = -torch.sum(returns @ log_probs)
+        print(f"Loss: {loss}")
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -135,7 +139,6 @@ class Reinforce:
             current_step = 0
 
             while not done and current_step < self.max_episode_len:
-                print(current_step)
                 action, log_probs = self.choose_action(state)
                 current_log_probs.append(log_probs)
                 next_state, reward, done, _, _ = self.environment.step(action)
@@ -151,4 +154,4 @@ class Reinforce:
                 )
                 state = next_state
                 current_step += 1
-            self.update_network(current_trajectory, log_probs)
+            self.update_network(current_trajectory, current_log_probs)
