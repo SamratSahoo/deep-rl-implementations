@@ -1,4 +1,5 @@
 from algorithms.ddpg import DDPG
+from algorithms.reinforce import Reinforce
 import gymnasium as gym
 import argparse
 import torch
@@ -18,11 +19,14 @@ if __name__ == "__main__":
         "--algorithm",
         help="choose an algorithm to run",
         default="ddpg",
-        choices=["ddpg"],
+        choices=["ddpg", "reinforce"],
     )
 
     args = parser.parse_args()
 
     if args.algorithm == "ddpg":
         agent = DDPG(environment)
+        agent.train()
+    elif args.algorithm == "reinforce":
+        agent = Reinforce(environment)
         agent.train()
