@@ -10,7 +10,7 @@
   </default>
 
   <worldbody>
-    <geom name="floor" type="plane" conaffinity="1" size="100 100 .2" material="grid"/>
+    <geom name="floor" type="plane" conaffinity="1" size="100 100 .2"/>
     <body name="pelvis" pos="0 0 1" childclass="body">
       <freejoint name="root"/>
       <geom name="pelvis" type="sphere" pos="0 0 0.07" size=".09" density="2226"/>

@@ -4,8 +4,11 @@ app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
 import omni.kit.commands
+from isaacsim.core.utils.extensions import enable_extension
 from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysicsSchemaTools
+import os
 
+enable_extension("isaacsim.asset.importer.mjcf")
 # create new stage
 omni.usd.get_context().new_stage()
 
@@ -22,7 +25,7 @@ extension_path = ext_manager.get_extension_path(ext_id)
 # import MJCF
 omni.kit.commands.execute(
     "MJCFCreateAsset",
-    mjcf_path=extension_path + "assets/humanoid.xml",
+    mjcf_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.xml",
     import_config=import_config,
     prim_path="/World/humanoid"
 )
@@ -41,4 +44,9 @@ scene.CreateGravityMagnitudeAttr().Set(981.0)
 distantLight = UsdLux.DistantLight.Define(stage, Sdf.Path("/DistantLight"))
 distantLight.CreateIntensityAttr(500)
 
-print("DONE3")
+# Save the stage as a USD file
+output_usd_path = f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid_scene.usd"
+omni.usd.get_context().save_as_stage(output_usd_path)
+print(f"Stage saved to {output_usd_path}")
+
+simulation_app.close()
