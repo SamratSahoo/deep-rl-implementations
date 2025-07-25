@@ -24,6 +24,7 @@ conda activate iccgan
 
 cd ~/
 git clone https://github.com/isaac-sim/IsaacLab.git
+sudo apt update
 sudo apt install cmake build-essential -y
 cd IsaacLab
 ./isaaclab.sh --install
