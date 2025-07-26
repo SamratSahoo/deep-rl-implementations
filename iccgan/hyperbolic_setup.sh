@@ -9,7 +9,6 @@ then
     conda init --all
 fi
 
-git clone https://github.com/SamratSahoo/deep-rl-implementations.git
 conda create -n iccgan python=3.10
 conda activate iccgan
 
@@ -19,6 +18,9 @@ pip install isaacsim[all]==4.5.0.0 --extra-index-url https://pypi.nvidia.com
 pip install isaacsim[extscache]==4.5.0.0 --extra-index-url https://pypi.nvidia.com
 
 echo "export OMNI_KIT_ACCEPT_EULA=YES" >> ~/.bashrc
+echo "PUBLIC_IP=$(curl -s ifconfig.me)" >> ~/.bashrc
+sudo ufw allow 47998/udp
+sudo ufw allow 49100/tcp
 source ~/.bashrc
 conda activate iccgan
 
@@ -26,5 +28,7 @@ cd ~/
 git clone https://github.com/isaac-sim/IsaacLab.git
 sudo apt update
 sudo apt install cmake build-essential -y
-cd IsaacLab
+sudo apt-get install libglu1 -y
+cd ~/IsaacLab
+conda activate iccgan
 ./isaaclab.sh --install
