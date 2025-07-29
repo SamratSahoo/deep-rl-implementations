@@ -1,11 +1,11 @@
 from isaaclab.assets import ArticulationCfg
-import isaaclab.sim
+from isaaclab.sim import UsdFileCfg
 from isaaclab.actuators import ImplicitActuatorCfg
 
 import os
 
 HUMANOID_CONFIG = ArticulationCfg(
-    spawn=isaaclab.sim.UsdFileCfg(
+    spawn=UsdFileCfg(
         usd_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd"
     ),
     init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 2.0)),

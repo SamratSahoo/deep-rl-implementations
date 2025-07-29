@@ -4,6 +4,7 @@ app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
 from isaaclab.sim import SimulationCfg, SimulationContext
+from env import ICCGANHumanoidEnv, ICCGANHumanoidEnvCfg
 
 def main():
 
@@ -18,4 +19,7 @@ def main():
         sim.step()
 
 if __name__ == "__main__":
-    main()
+    # main()
+    env_cfg = ICCGANHumanoidEnvCfg()
+    env = ICCGANHumanoidEnv(env_cfg)
+    print(env)

@@ -8,15 +8,17 @@ from gymnasium import spaces
 import numpy as np
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim.spawners.lights import DomeLightCfg
+from isaaclab.utils import configclass
+import torch
 
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
     decimation = 1
-    episode_length = 1000
+    episode_length_s = 1000
     action_scale = 1
 
     # TODO: change action and observation spaces
-    action_space = spaces.Box(low=-np.inf, high=np.inf, shape=(36))
+    action_space = spaces.Box(low=-np.inf, high=np.inf, shape=(36,))
     """
     15 Links x 13 Observations per link = 195 observation space
     [ 
@@ -26,7 +28,7 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
         wx, wy, wz       # Angular velocity (3)
     ]
     """
-    observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(195))
+    observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(195,))
     sim: SimulationCfg = SimulationCfg(dt=1 / 240, render_interval=decimation)
     robot_cfg: ArticulationCfg = HUMANOID_CONFIG.replace(prim_path="/World/envs/env_.*/Robot")
 
