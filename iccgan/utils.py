@@ -208,3 +208,4 @@ HUMANOID_CONFIG = ArticulationCfg(
         ),
     },
 )
+

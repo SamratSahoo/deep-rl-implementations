@@ -5,7 +5,7 @@ simulation_app = app_launcher.app
 
 import omni.kit.commands
 from isaacsim.core.utils.extensions import enable_extension
-from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysicsSchemaTools
+from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysicsSchemaTools, UsdPhysics
 import os
 
 enable_extension("isaacsim.asset.importer.mjcf")
@@ -32,6 +32,9 @@ omni.kit.commands.execute(
 
 # get stage handle
 stage = omni.usd.get_context().get_stage()
+humanoid_prim = stage.GetPrimAtPath("/World/humanoid")
+articulation_api = UsdPhysics.ArticulationRootAPI.Apply(humanoid_prim)
+print(articulation_api)
 
 # enable physics
 scene = UsdPhysics.Scene.Define(stage, Sdf.Path("/physicsScene"))
@@ -45,7 +48,7 @@ distantLight = UsdLux.DistantLight.Define(stage, Sdf.Path("/DistantLight"))
 distantLight.CreateIntensityAttr(500)
 
 # Save the stage as a USD file
-output_usd_path = f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid_scene.usd"
+output_usd_path = f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd"
 omni.usd.get_context().save_as_stage(output_usd_path)
 print(f"Stage saved to {output_usd_path}")
 
