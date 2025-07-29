@@ -1,14 +1,17 @@
 from isaaclab.assets import ArticulationCfg
 from isaaclab.sim import UsdFileCfg
 from isaaclab.actuators import ImplicitActuatorCfg
-
+from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 import os
+
 
 HUMANOID_CONFIG = ArticulationCfg(
     spawn=UsdFileCfg(
-        usd_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd"
+        usd_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd",        
     ),
-    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 2.0)),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 2.0)),
+        prim_path="/World/envs/env_.*/humanoid",
     actuators={
         "abdomen_x": ImplicitActuatorCfg(
             joint_names_expr=["abdomen_x"],

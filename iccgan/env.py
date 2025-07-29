@@ -12,8 +12,9 @@ from isaaclab.utils import configclass
 import torch
 import isaacsim.core.utils.articulations as articulations_utils
 import isaacsim.core.utils.prims as prims_utils
-
-
+import isaaclab.sim as sim_utils
+from isaaclab.sim import UsdFileCfg
+import omni.physics.tensors as tensors
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
     decimation = 1
@@ -33,7 +34,7 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
     """
     observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(195,))
     sim: SimulationCfg = SimulationCfg(dt=1 / 240, render_interval=decimation)
-    robot_cfg: ArticulationCfg = HUMANOID_CONFIG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot_cfg: ArticulationCfg = HUMANOID_CONFIG.replace(prim_path="/World/envs/env_.*/humanoid")
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=2,
@@ -46,17 +47,11 @@ class ICCGANHumanoidEnv(DirectRLEnv):
     cfg: ICCGANHumanoidEnvCfg
     
     def __init__(self, cfg: ICCGANHumanoidEnvCfg, render_mode: str | None = None, **kwargs):
-        self.current_setup_num = 0
         super().__init__(cfg, render_mode, **kwargs)
         self.action_scale = self.cfg.action_scale
     
     def _setup_scene(self):
         self.humanoid = Articulation(self.cfg.robot_cfg)
-        humanoid_usd_prim = prims_utils.get_prim_at_path(
-            prim_path=f"/World/envs/env_{self.current_setup_num}/Robot"
-        )
-        articulations_utils.add_articulation_root(prim=humanoid_usd_prim)
-        self.current_setup_num += 1
 
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
         self.scene.clone_environments(copy_from_source=False)
@@ -68,6 +63,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
         light_cfg = DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = self.action_scale * actions.clone()

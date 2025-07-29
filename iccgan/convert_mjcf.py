@@ -1,55 +1,48 @@
 from isaaclab.app import AppLauncher
+import os
 
+# 1) Launch headless Isaac Sim
 app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
+# 2) Imports for commands & USD APIs
 import omni.kit.commands
+import omni.usd                                        # <-- make sure you have omni.usd
 from isaacsim.core.utils.extensions import enable_extension
-from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysicsSchemaTools, UsdPhysics
-import os
+from pxr import UsdPhysics
+import isaacsim.core.utils.articulations as articulations_utils
+import isaacsim.core.utils.prims as prims_utils
 
+# 3) Turn on the MJCF importer
 enable_extension("isaacsim.asset.importer.mjcf")
-# create new stage
+
+# 4) New blank stage
 omni.usd.get_context().new_stage()
 
-# setting up import configuration:
+# 5) Build import config
 status, import_config = omni.kit.commands.execute("MJCFCreateImportConfig")
+# Floating‑base: keep the freejoint instead of welding pelvis to the world
 import_config.set_fix_base(False)
 import_config.set_make_default_prim(False)
 
-# Get path to extension data:
-ext_manager = omni.kit.app.get_app().get_extension_manager()
-ext_id = ext_manager.get_enabled_extension_id("isaacsim.asset.importer.mjcf")
-extension_path = ext_manager.get_extension_path(ext_id)
-
-# import MJCF
+# 6) Run the import
+mjcf_path = os.path.join(os.path.dirname(__file__), "assets", "humanoid.xml")
 omni.kit.commands.execute(
     "MJCFCreateAsset",
-    mjcf_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.xml",
+    mjcf_path=mjcf_path,
     import_config=import_config,
-    prim_path="/World/humanoid"
+    prim_path="/World/humanoid"        # your new root Xform
 )
 
-# get stage handle
+# 7) Mark the pelvis as articulation root
 stage = omni.usd.get_context().get_stage()
-humanoid_prim = stage.GetPrimAtPath("/World/humanoid")
-articulation_api = UsdPhysics.ArticulationRootAPI.Apply(humanoid_prim)
-print(articulation_api)
+humanoid_prim = prims_utils.get_prim_at_path(prim_path="/World/humanoid")
+articulations_utils.add_articulation_root(prim=humanoid_prim)
 
-# enable physics
-scene = UsdPhysics.Scene.Define(stage, Sdf.Path("/physicsScene"))
+# 8) Save it out
+output_usd = os.path.join(os.path.dirname(__file__), "assets", "humanoid.usd")
+omni.usd.get_context().save_as_stage(output_usd)
+print(f"Saved USD to {output_usd}")
 
-# set gravity
-scene.CreateGravityDirectionAttr().Set(Gf.Vec3f(0.0, 0.0, -1.0))
-scene.CreateGravityMagnitudeAttr().Set(981.0)
-
-# add lighting
-distantLight = UsdLux.DistantLight.Define(stage, Sdf.Path("/DistantLight"))
-distantLight.CreateIntensityAttr(500)
-
-# Save the stage as a USD file
-output_usd_path = f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd"
-omni.usd.get_context().save_as_stage(output_usd_path)
-print(f"Stage saved to {output_usd_path}")
-
+# 9) Clean up
 simulation_app.close()
