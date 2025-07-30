@@ -1,37 +1,30 @@
 from isaaclab.app import AppLauncher
 
 app_launcher = AppLauncher(headless=True, enable_cameras=True)
-simulation_app = app_launcher.app
+simulation_
+
+import gym
+
+# gym.register(
+#         id="Isaac-ICCGAN-v0",
+#         entry_point=f"{__name__}.env:ICCGANHumanoidEnv",
+#         disable_env_checker=True,
+#         kwargs={
+#             "env_cfg_entry_point": f"{__name__}.env:ICCGANHumanoidEnvCfg",
+#         },
+#     )
 
 from isaaclab.sim import SimulationCfg, SimulationContext
 from env import ICCGANHumanoidEnv, ICCGANHumanoidEnvCfg
 import torch
+
 def main():
-
-    """Main function."""
-    sim_cfg = SimulationCfg(dt=0.01)
-
-    sim = SimulationContext(sim_cfg)
-    sim.set_camera_view([2.5, 2.5, 2.5], [0.0, 0.0, 0.0])
-    sim.reset()
-
+    # env = gym.make("Isaac-ICCGAN-v0")
+    env = ICCGANHumanoidEnv(ICCGANHumanoidEnvCfg())
     while simulation_app.is_running():
-        sim.step()
+        env.step(torch.randn(env.num_envs, env.action_space.shape[0]))
+    
+    env.close()
 
 if __name__ == "__main__":
-    gym.register(
-        id="Isaac-ICCGAN-v0",
-        entry_point=f"{__name__}.env:ICCGANHumanoidEnv",
-        disable_env_checker=True,
-        kwargs={
-            "env_cfg_entry_point": f"{__name__}.env:ICCGANHumanoidEnvCfg",
-        },
-    )
-
-    env = gym.make("Isaac-ICCGAN-v0")
-    # env_cfg = ICCGANHumanoidEnvCfg()
-    # env = ICCGANHumanoidEnv(env_cfg)
-
-    for i in range(100):
-        env.step(torch.randn(env.num_envs, env.action_space.shape[0]))
-    print(env)
+    main()
