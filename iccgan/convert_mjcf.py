@@ -36,9 +36,15 @@ omni.kit.commands.execute(
 
 # 7) Mark the pelvis as articulation root
 stage = omni.usd.get_context().get_stage()
-humanoid_prim = prims_utils.get_prim_at_path(prim_path="/World/humanoid")
-articulations_utils.add_articulation_root(prim=humanoid_prim)
+# world_body_prim = prims_utils.get_prim_at_path(prim_path="/World/humanoid/worldBody")
+# articulations_utils.remove_articulation_root(prim=world_body_prim)
+# pelvis_prim = prims_utils.get_prim_at_path(prim_path="/World/humanoid/pelvis")
+# articulations_utils.remove_articulation_root(prim=pelvis_prim)
 
+# humanoid_prim = prims_utils.get_prim_at_path(prim_path="/World/humanoid")
+# articulations_utils.remove_articulation_root(prim=humanoid_prim)
+
+print(prims_utils.get_articulation_root_api_prim_path("/World/humanoid"))
 # 8) Save it out
 output_usd = os.path.join(os.path.dirname(__file__), "assets", "humanoid.usd")
 omni.usd.get_context().save_as_stage(output_usd)

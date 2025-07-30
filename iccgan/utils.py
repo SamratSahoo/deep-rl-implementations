@@ -11,7 +11,7 @@ HUMANOID_CONFIG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 2.0)),
-        prim_path="/World/envs/env_.*/humanoid",
+    prim_path="/World/envs/env_.*/humanoid",
     actuators={
         "abdomen_x": ImplicitActuatorCfg(
             joint_names_expr=["abdomen_x"],
