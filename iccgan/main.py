@@ -1,6 +1,6 @@
 from isaaclab.app import AppLauncher
 
-app_launcher = AppLauncher(headless=True)
+app_launcher = AppLauncher(headless=True, enable_cameras=True)
 simulation_app = app_launcher.app
 
 from isaaclab.sim import SimulationCfg, SimulationContext
@@ -19,9 +19,18 @@ def main():
         sim.step()
 
 if __name__ == "__main__":
-    # main()
-    env_cfg = ICCGANHumanoidEnvCfg()
-    env = ICCGANHumanoidEnv(env_cfg)
+    gym.register(
+        id="Isaac-ICCGAN-v0",
+        entry_point=f"{__name__}.env:ICCGANHumanoidEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.env:ICCGANHumanoidEnvCfg",
+        },
+    )
+
+    env = gym.make("Isaac-ICCGAN-v0")
+    # env_cfg = ICCGANHumanoidEnvCfg()
+    # env = ICCGANHumanoidEnv(env_cfg)
 
     for i in range(100):
         env.step(torch.randn(env.num_envs, env.action_space.shape[0]))
