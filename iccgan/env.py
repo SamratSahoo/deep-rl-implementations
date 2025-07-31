@@ -134,4 +134,4 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         """Get termination flags from the environment."""
         # TODO: Implement proper terminations
         # For now, return no terminations
-        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device), torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)

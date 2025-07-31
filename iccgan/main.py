@@ -1,28 +1,32 @@
 from isaaclab.app import AppLauncher
+app_launcher = AppLauncher(headless=True)
+simulation_app = app_launcher.app
 
-app_launcher = AppLauncher(headless=True, enable_cameras=True)
-simulation_
-
-import gym
-
-# gym.register(
-#         id="Isaac-ICCGAN-v0",
-#         entry_point=f"{__name__}.env:ICCGANHumanoidEnv",
-#         disable_env_checker=True,
-#         kwargs={
-#             "env_cfg_entry_point": f"{__name__}.env:ICCGANHumanoidEnvCfg",
-#         },
-#     )
-
+import env
+import gymnasium as gym
 from isaaclab.sim import SimulationCfg, SimulationContext
 from env import ICCGANHumanoidEnv, ICCGANHumanoidEnvCfg
 import torch
 
+gym.register(
+        id="Isaac-ICCGAN-v0",
+        disable_env_checker=True,
+        entry_point=f"{env.__name__}:ICCGANHumanoidEnv",
+        kwargs={
+            "cfg": ICCGANHumanoidEnvCfg(),
+        },
+    )
+
 def main():
-    # env = gym.make("Isaac-ICCGAN-v0")
-    env = ICCGANHumanoidEnv(ICCGANHumanoidEnvCfg())
-    while simulation_app.is_running():
-        env.step(torch.randn(env.num_envs, env.action_space.shape[0]))
+    env = gym.make("Isaac-ICCGAN-v0", disable_env_checker=True, render_mode="rgb_array")
+    # env = gym.wrappers.RecordVideo(env, f"videos/")
+    # env.recorded_frames = []
+    env.reset()
+    i = 0
+    while simulation_app.is_running() and i < 1000:
+        env.step(torch.randn(2, env.action_space.shape[0]))
+        if i % 100 ==0:
+            env.reset()
     
     env.close()
 
