@@ -3,6 +3,7 @@ from isaaclab.sim import UsdFileCfg
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 import os
+import torch
 
 
 HUMANOID_CONFIG = ArticulationCfg(
@@ -212,3 +213,29 @@ HUMANOID_CONFIG = ArticulationCfg(
     },
 )
 
+def quaternion_to_euler(quat):
+        """Convert quaternion to Euler angles (roll, pitch, yaw)."""
+        # Extract quaternion components
+        w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+        
+        # Convert to Euler angles (roll, pitch, yaw)
+        # Roll (x-axis rotation)
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = torch.atan2(sinr_cosp, cosr_cosp)
+        
+        # Pitch (y-axis rotation)
+        sinp = 2 * (w * y - z * x)
+        # Check for gimbal lock
+        pitch = torch.where(
+            torch.abs(sinp) >= 1,
+            torch.sign(sinp) * torch.pi / 2,
+            torch.asin(sinp)
+        )
+        
+        # Yaw (z-axis rotation)
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = torch.atan2(siny_cosp, cosy_cosp)
+        
+        return torch.stack([roll, pitch, yaw], dim=1)
