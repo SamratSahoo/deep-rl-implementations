@@ -21,7 +21,6 @@ import omni.kit.commands
 import omni.usd
 from pxr import UsdPhysics
 import matplotlib.pyplot as plt
-from isaaclab.sensors import TiledCameraCfg, TiledCamera
 
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
@@ -65,17 +64,6 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
         replicate_physics=True
     )
 
-    tiled_camera_cfg: TiledCameraCfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/Camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=(-7.0, 0.0, 3.0), rot=(0.9945, 0.0, 0.1045, 0.0), convention="world"),
-        data_types=["rgb"],
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
-        ),
-        width=80,
-        height=80,
-    )
-
 
 class ICCGANHumanoidEnv(DirectRLEnv):
     cfg: ICCGANHumanoidEnvCfg
@@ -85,7 +73,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         self.action_scale = self.cfg.action_scale
     
     def _setup_scene(self):
-        spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
+        spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(size=(200,200)))
         
         self.scene.clone_environments(copy_from_source=False)
         
@@ -125,8 +113,6 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         light_cfg = DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         spawn_light("/World/Light", light_cfg)
 
-        self.tiled_camera = TiledCamera(self.cfg.tiled_camera_cfg)
-
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = self.action_scale * actions.clone()
@@ -152,7 +138,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
     def _apply_action(self):
         """Apply actions to the humanoid joints."""
-        plt.imsave("test.png", self.tiled_camera.data.output["rgb"])
+
         spherical_joint_groups = [
             ['abdomen_x', 'abdomen_y', 'abdomen_z'],
             ['neck_x', 'neck_y', 'neck_z'],
