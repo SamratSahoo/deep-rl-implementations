@@ -239,3 +239,14 @@ def quaternion_to_euler(quat):
         yaw = torch.atan2(siny_cosp, cosy_cosp)
         
         return torch.stack([roll, pitch, yaw], dim=1)
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+
+    def push(self, state, action, reward, next_state, done):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = (state, action, reward, next_state, done)
