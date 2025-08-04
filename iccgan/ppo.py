@@ -6,6 +6,7 @@ import random
 import numpy as np
 import torch
 import gymnasium as gym
+from utils import DiscriminatorBuffer
 
 class Agent(nn.Module):
     def __init__(self, envs):
@@ -78,6 +79,7 @@ class PPO:
         self.env = gym.wrappers.RecordVideo(self.env, **video_kwargs)
 
         self.agent = Agent(self.env)
+        self.discriminator_buffer = DiscriminatorBuffer(capacity=10000)
     
     def train(self):
         optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
@@ -105,4 +107,7 @@ class PPO:
                 dones[step] = next_done
 
                 with torch.no_grad():
-                    pass
+                    action, logprob, _, value = self.agent.get_action_and_value(next_obs, self.num_envs)
+                    values[step] = value.flatten()
+                actions[step] = action
+                logprobs[step] = logprob

@@ -4,6 +4,8 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 import os
 import torch
+from collections import deque
+import math
 
 
 HUMANOID_CONFIG = ArticulationCfg(
@@ -240,13 +242,48 @@ def quaternion_to_euler(quat):
         
         return torch.stack([roll, pitch, yaw], dim=1)
 
-class ReplayBuffer:
+def quatmultiply(q0, q1):
+    x1, y1, z1, w1 = q0
+    x2, y2, z2, w2 = q1
+    return [
+        w2*x1+x2*w1-y2*z1+z2*y1,
+        w2*y1+x2*z1+y2*w1-z2*x1,
+        w2*z1-x2*y1+y2*x1+z2*w1,
+        w2*w1-x2*x1-y2*y1-z2*z1
+    ]
+
+def quatconj(q):
+    return [-q[0], -q[1], -q[2], q[3]]
+
+def quatdiff(q0, q1):
+    return quatmultiply(q1, quatconj(q0))
+
+def quatdiff_rel(q0, q1):
+    return quatmultiply(quatconj(q0), q1)
+
+def quat2axis_angle(q):
+    x, y, z, w = q
+    norm = (x*x + y*y + z*z + w*w)**0.5
+    if norm == 0:
+        return [0, 0, 1], 0
+    
+    x, y, z, w = x/norm, y/norm, z/norm, w/norm
+    
+    if abs(w) > 0.9999:
+        return [0, 0, 1], 0
+    
+    angle = 2 * math.acos(w)
+    
+    sin_half_angle = math.sqrt(1 - w*w)
+    axis = [x/sin_half_angle, y/sin_half_angle, z/sin_half_angle]
+    
+    return axis, angle
+
+class DiscriminatorBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
-        self.buffer = []
+        self.buffer = deque(maxlen=capacity)
         self.position = 0
 
-    def push(self, state, action, reward, next_state, done):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, done)
+    def push(self, state, action, value, advantage, log_prob, seq_len):
+        self.buffer.append((state, action, value, advantage, log_prob, seq_len))

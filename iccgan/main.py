@@ -59,7 +59,7 @@ def main():
         if i % 100 ==0:
             env.reset()
         
-        i +=1 
+        i += 1
     
     env.close()
 
