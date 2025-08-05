@@ -169,3 +169,9 @@ class ReferenceMotion:
         axis, angle = quat2axis_angle(quatdiff_rel(q0, q1))
         angle /= delta_t
         return [angle*a for a in axis]
+
+if __name__ == "__main__":
+    motion_file = "assets/motions/run.json"
+    reference_motion = ReferenceMotion(motion_file)
+    reference_motion.parse_frames()
+    print(reference_motion.frame_states)

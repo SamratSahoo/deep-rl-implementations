@@ -198,6 +198,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
     def _get_dones(self) -> dict:
         """Get termination flags from the environment."""
+        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         dones = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         
         # 1. Reference End: t ≥ clip_length (non-cyclic motions)
@@ -221,7 +222,6 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         positions = body_states[:, :, :3]  # (num_envs, 15, 3)        
         ground_height = 0.0
         
-        contactable_indices = self._get_link_indices(self.contactable_links)
         invalid_contact_indices = self._get_link_indices(["chest", "head", "pelvis"])        
         invalid_contact = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         
