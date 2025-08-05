@@ -6,7 +6,7 @@ import random
 import numpy as np
 import torch
 import gymnasium as gym
-from utils import DiscriminatorBuffer
+from isaac_utils import DiscriminatorBuffer
 
 class Agent(nn.Module):
     def __init__(self, envs):

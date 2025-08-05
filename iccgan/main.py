@@ -5,8 +5,8 @@ import sys
 
 parser = argparse.ArgumentParser(description="Train ICCGAN Agents")
 parser.add_argument("--video", action="store_true", default=True, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=500, help="Interval between video recordings (in steps).")
+parser.add_argument("--video_length", type=int, default=1000, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_interval", type=int, default=1000, help="Interval between video recordings (in steps).")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -25,6 +25,7 @@ from isaaclab.sim import SimulationCfg, SimulationContext
 from env import ICCGANHumanoidEnv, ICCGANHumanoidEnvCfg
 import torch
 import time
+import numpy as np
 
 gym.register(
         id="Isaac-ICCGAN-v0",
@@ -37,7 +38,8 @@ gym.register(
 
 def main():
     env = gym.make("Isaac-ICCGAN-v0", disable_env_checker=True, 
-        render_mode="rgb_array" if args_cli.video else None
+        render_mode="rgb_array" if args_cli.video else None,
+        num_envs=4, motion_file="assets/motions/run.json"
     )
 
     log_root_path = os.path.join("logs", "iccgan")
@@ -55,13 +57,13 @@ def main():
     env.reset()
     i = 0
     while simulation_app.is_running() and i < 1000:
-        env.step(torch.randn(env.action_space.shape))
-        if i % 100 ==0:
-            env.reset()
-        
+        next_state, reward, done, truncated, info = env.step(torch.randn(env.action_space.shape))
+        reset_indices = torch.nonzero(torch.logical_or(done, truncated), as_tuple=True)[0]
+        env.unwrapped._reset_idx(reset_indices)
         i += 1
     
     env.close()
+    simulation_app.close()
 
 if __name__ == "__main__":
     main()

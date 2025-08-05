@@ -1,15 +1,14 @@
 import json
 import torch
-from utils import quat2axis_angle, quatdiff, quatdiff_rel
+from quat_utils import quat2axis_angle, quatdiff, quatdiff_rel
 import math
+import random
 
 class ReferenceMotion:
-    def __init__(self, motion_file: str):
+    def __init__(self, motion_file: str, body_mapping: list = None):
         self.motion_file = motion_file
         self.motion_data = None
-        self.contactable_links = []
-        self.is_cyclic = False
-        self.clip_length = 0
+        self.body_mapping = body_mapping
 
         with open(motion_file, "r") as f:
             self.motion_data = json.load(f)
@@ -34,21 +33,7 @@ class ReferenceMotion:
 
     @property
     def clip_length(self):
-        return (
-            torch.full(
-                (self.num_envs,),
-                500,
-                dtype=torch.int64,
-                device=self.device,
-            )
-            if self.is_cyclic
-            else torch.full(
-                (self.num_envs,),
-                len(self.frames),
-                dtype=torch.int64,
-                device=self.device,
-            )
-        )
+        return 500 if self.is_cyclic else len(self.raw_frames)
 
     def parse_frames(self):
         """Parse raw frames and compute velocities for each joint."""
@@ -70,53 +55,35 @@ class ReferenceMotion:
                     processed_frame[joint + "_angvel"] = ReferenceMotion.angular_vel(joint_data, next_joint_data, self.dt)
             
             self.frame_states.append(self.get_state_from_frame(processed_frame))
-
+    
     def get_state_from_frame(self, processed_frame):
         """
         Convert processed frame data to observation vector.
         
         15 Links x 13 Observations per link = 195 observation space
         Each link has: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-        
-        Links mapping:
-        0: pelvis
-        1: abdomen
-        2: chest
-        3: neck
-        4: head
-        5: right_hip
-        6: right_knee
-        7: right_ankle
-        8: right_foot
-        9: right_shoulder
-        10: left_hip
-        11: left_knee
-        12: left_ankle
-        13: left_foot
-        14: left_shoulder
         """
         state_vector = []
+        link_mapping = {
+            "torso": ("torso", "base_position", "base_orientation"),
+            "pelvis": ("pelvis", None, "pelvis"),
+            "head": ("head", None, "head"),
+            "right_upper_arm": ("right_upper_arm", None, "right_shoulder"),
+            "left_upper_arm": ("left_upper_arm", None, "left_shoulder"),
+            "right_thigh": ("right_thigh", None, "right_hip"),
+            "left_thigh": ("left_thigh", None, "left_hip"),
+            "right_lower_arm": ("right_lower_arm", None, "right_elbow"),
+            "left_lower_arm": ("left_lower_arm", None, "left_elbow"),
+            "right_shin": ("right_shin", None, "right_knee"),
+            "left_shin": ("left_shin", None, "left_knee"),
+            "right_hand": ("right_hand", None, "right_wrist"),
+            "left_hand": ("left_hand", None, "left_wrist"),
+            "right_foot": ("right_foot", None, "right_ankle"),
+            "left_foot": ("left_foot", None, "left_ankle"),
+        }
         
-        # Define the 15 links and their corresponding motion data
-        link_mapping = [
-            ("pelvis", "base_position", "base_orientation"),
-            ("abdomen", None, "abdomen"),
-            ("chest", None, "abdomen"), # Use abdomen data for chest
-            ("neck", None, "neck"),
-            ("head", None, "head"),
-            ("right_hip", None, "right_hip"),
-            ("right_knee", None, "right_knee"),
-            ("right_ankle", None, "right_ankle"),
-            ("right_foot", None, "right_ankle"), # Use ankle data for foot
-            ("right_shoulder", None, "right_shoulder"),
-            ("left_hip", None, "left_hip"),
-            ("left_knee", None, "left_knee"),
-            ("left_ankle", None, "left_ankle"),
-            ("left_foot", None, "left_ankle"),    # Use ankle data for foot
-            ("left_shoulder", None, "left_shoulder"),
-        ]
-        
-        for link_name, pos_key, orient_key in link_mapping:
+        for body in self.body_mapping:
+            link_name, pos_key, orient_key = link_mapping[body]
             # Initialize with zeros
             pos = [0.0, 0.0, 0.0]
             orient = [0.0, 0.0, 0.0, 1.0]  # Identity quaternion
@@ -149,8 +116,19 @@ class ReferenceMotion:
         
         return state_vector
 
-    def sample(self, num_samples, sample_length):
-        pass
+    def sample(self, num_samples, sample_length=4):
+        if len(self.frame_states) < sample_length:
+            return []
+        
+        max_start_idx = len(self.frame_states) - sample_length
+        samples = []
+        
+        for _ in range(num_samples):
+            start_idx = random.randint(0, max_start_idx)
+            sample = self.frame_states[start_idx:start_idx + sample_length]
+            samples.append(sample)
+        
+        return samples
 
     @staticmethod
     def linear_vel(p0, p1, delta_t):
@@ -174,4 +152,4 @@ if __name__ == "__main__":
     motion_file = "assets/motions/run.json"
     reference_motion = ReferenceMotion(motion_file)
     reference_motion.parse_frames()
-    print(reference_motion.frame_states)
+    print(torch.tensor(reference_motion.frame_states).shape)

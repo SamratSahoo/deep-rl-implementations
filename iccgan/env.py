@@ -4,7 +4,8 @@ from isaaclab.sim import SimulationCfg
 import os
 import json
 from typing import Dict, List, Optional
-from utils import HUMANOID_CONFIG, quaternion_to_euler
+from quat_utils import quaternion_to_euler
+from isaac_utils import HUMANOID_CONFIG
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from gymnasium import spaces
 import numpy as np
@@ -23,6 +24,7 @@ import omni.kit.commands
 import omni.usd
 from pxr import UsdPhysics
 from reference_motion import ReferenceMotion
+from isaacsim.core.simulation_manager import SimulationManager
 
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
@@ -70,15 +72,14 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
 class ICCGANHumanoidEnv(DirectRLEnv):
     cfg: ICCGANHumanoidEnvCfg
     
-    def __init__(self, cfg: ICCGANHumanoidEnvCfg, render_mode: str | None = None, motion_file: Optional[str] = None, **kwargs):
+    def __init__(self, cfg: ICCGANHumanoidEnvCfg, render_mode: str | None = None, motion_file: str = "assets/motions/run.json", num_envs: int = 2, **kwargs):
+        cfg.scene.num_envs = num_envs
         super().__init__(cfg, render_mode, **kwargs)
         self.action_scale = self.cfg.action_scale
+        self.motion_file = motion_file
 
-        self.reference_motion = ReferenceMotion(motion_file)
-        self.contactable_links = self.reference_motion.contactable_links
-        self.clip_length = self.reference_motion.clip_length
-        self.is_cyclic = torch.full((self.num_envs,), 1 if self.reference_motion.is_cyclic else 0, dtype=torch.bool, device=self.device)
         self.episode_step = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
+        self.reference_motion = None
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(size=(200,200)))
@@ -121,7 +122,6 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         light_cfg = DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         spawn_light("/World/Light", light_cfg)
 
-
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = self.action_scale * actions.clone()
         # Increment episode step counter
@@ -137,12 +137,33 @@ class ICCGANHumanoidEnv(DirectRLEnv):
     
     def _reset_idx(self, env_ids: torch.Tensor):
         """Reset environments with the given indices."""
+        if self.reference_motion is None:
+            self.body_mapping = self._create_body_mapping()
+            self.reference_motion = ReferenceMotion(self.motion_file, self.body_mapping)
+            self.contactable_links = self.reference_motion.contactable_links
+            self.clip_length = torch.full((self.num_envs,), self.reference_motion.clip_length, device=self.device)
+            self.is_cyclic = torch.full((self.num_envs,), 1 if self.reference_motion.is_cyclic else 0, dtype=torch.bool, device=self.device)
+
         # Reset episode step counter for the specified environments
         self.episode_step[env_ids] = 0
         
-        # TODO: Implement proper motion reset logic
-        # For now, just reset the step counter
-        pass
+        # Call parent reset method first
+        super()._reset_idx(env_ids)
+        
+        # Get default joint states from the articulation
+        joint_pos = self.humanoid.data.default_joint_pos[env_ids]
+        joint_vel = self.humanoid.data.default_joint_vel[env_ids]
+        
+        # Get default root state
+        default_root_state = self.humanoid.data.default_root_state[env_ids].clone()
+        # Apply environment origins to root position
+        default_root_state[:, :3] += self.scene.env_origins[env_ids].to(self.device)
+        
+        # Write the reset states to simulation
+        self.humanoid.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
+        self.humanoid.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        self.humanoid.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
     
     def _get_rewards(self) -> torch.Tensor:
         """Get rewards from the environment."""
@@ -198,7 +219,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
     def _get_dones(self) -> dict:
         """Get termination flags from the environment."""
-        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device), torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         dones = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         
         # 1. Reference End: t ≥ clip_length (non-cyclic motions)
@@ -213,16 +234,16 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         early_term = self._check_invalid_ground_contact()
         dones |= early_term
         
-        return dones
+        return dones, dones
     
     def _check_invalid_ground_contact(self) -> torch.Tensor:
-        """Check for invalid ground contact (e.g., chest hits ground while walking)."""
+        """Check for invalid ground contact (e.g., torso hits ground while walking)."""
 
         body_states = self.humanoid.data.body_state_w  # (num_envs, 15, 13)
         positions = body_states[:, :, :3]  # (num_envs, 15, 3)        
         ground_height = 0.0
         
-        invalid_contact_indices = self._get_link_indices(["chest", "head", "pelvis"])        
+        invalid_contact_indices = self._get_link_indices(["torso", "head", "pelvis"])        
         invalid_contact = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         
         for idx in invalid_contact_indices:
@@ -234,33 +255,23 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         invalid_contact &= (self.episode_step > 10)
         return invalid_contact
     
+    def _create_body_mapping(self) -> list:
+        """Create body mapping based on actual articulation body names."""
+        # Get the actual body names from the articulation
+        body_names = self.humanoid.body_names
+        
+        # Create mapping from body names to motion data keys
+        # This maps each body to its corresponding motion data key
+        body_mapping = [0] * len(body_names)
+        
+        for body_name in body_names:
+            body_idx = self._get_link_indices([body_name])[0]
+            body_mapping[body_idx] = body_name
+        
+        return body_mapping
+
     def _get_link_indices(self, link_names: List[str]) -> List[int]:
         """Get body state indices for given link names."""
-        # This is a simplified mapping - in a real implementation,
-        # you would query the articulation to get the actual link indices
-        # For now, we'll use a basic mapping based on typical humanoid structure
-        
-        link_mapping = {
-            'pelvis': 0,
-            'abdomen': 1,
-            'chest': 2,
-            'neck': 3,
-            'head': 4,
-            'right_hip': 5,
-            'right_knee': 6,
-            'right_ankle': 7,
-            'right_foot': 8,
-            'left_hip': 9,
-            'left_knee': 10,
-            'left_ankle': 11,
-            'left_foot': 12,
-            'right_shoulder': 13,
-            'left_shoulder': 14
-        }
-        
-        indices = []
-        for link_name in link_names:
-            if link_name in link_mapping:
-                indices.append(link_mapping[link_name])
-        
+        # Use the articulation's find_bodies method to get actual indices
+        indices, _ = self.humanoid.find_bodies(link_names, preserve_order=True)
         return indices
