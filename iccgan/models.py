@@ -24,19 +24,12 @@ class Critic(nn.Module):
             elif "bias" in name:
                 torch.nn.init.constant_(param, 0)
     
-    def forward(self, sequence, seq_length):
+    def forward(self, sequence):
         if sequence.ndim == 2:
             sequence = sequence.unsqueeze(0)
         out, hidden = self.gru(sequence)
 
-        # Get final time step of GRU output
-        if torch.is_tensor(seq_length):
-            seq_length = seq_length - 1 # 0-indexed
-            seq_length = seq_length.unsqueeze(-1).unsqueeze(-1) # (batch_size, 1, 1)
-            seq_length = seq_length.expand(-1, -1, *out.shape[2:]) # (batch_size, 1, hidden_size)
-            out = out.gather(1, seq_length)
-        else:
-            out = out[:, seq_length-1]
+        out = out[:, -1, :]
         out = self.mlp(out)
         return out
         
@@ -67,19 +60,12 @@ class Actor(nn.Module):
             elif "bias" in name:
                 torch.nn.init.constant_(param, 0)
     
-    def forward(self, sequence, seq_length):
+    def forward(self, sequence,):
         if sequence.ndim == 2:
             sequence = sequence.unsqueeze(0)
         out, hidden = self.gru(sequence)
 
-        # Get final time step of GRU output
-        if torch.is_tensor(seq_length):
-            seq_length = seq_length - 1 # 0-indexed
-            seq_length = seq_length.unsqueeze(-1).unsqueeze(-1) # (batch_size, 1, 1)
-            seq_length = seq_length.expand(-1, -1, *out.shape[2:]) # (batch_size, 1, hidden_size)
-            out = out.gather(1, seq_length)
-        else:
-            out = out[:, seq_length-1]
+        out = out[:, -1, :]
         out = self.mlp(out)
 
         mu = self.policy_mu(out)
@@ -112,19 +98,11 @@ class Discriminator(nn.Module):
                 torch.nn.init.constant_(param, 0)
             i += 1
     
-    def forward(self, sequence, seq_length):
+    def forward(self, sequence):
         if sequence.ndim == 2:
             sequence = sequence.unsqueeze(0)
         out, hidden = self.gru(sequence)
-
-        # Get final time step of GRU output
-        if torch.is_tensor(seq_length):
-            seq_length = seq_length - 1 # 0-indexed
-            seq_length = seq_length.unsqueeze(-1).unsqueeze(-1) # (batch_size, 1, 1)
-            seq_length = seq_length.expand(-1, -1, *out.shape[2:]) # (batch_size, 1, hidden_size)
-            out = out.gather(1, seq_length)
-        else:
-            out = out[:, seq_length-1]
+        out = out[:, -1, :]
         out = self.mlp(out)
         return out
 

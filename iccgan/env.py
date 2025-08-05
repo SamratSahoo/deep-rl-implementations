@@ -81,6 +81,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         self.episode_step = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
         self.reference_motion = None
 
+
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(size=(200,200)))
         
@@ -219,22 +220,17 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
     def _get_dones(self) -> dict:
         """Get termination flags from the environment."""
-        # return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device), torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         dones = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         
-        # 1. Reference End: t ≥ clip_length (non-cyclic motions)
         ref_end = (~self.is_cyclic) & (self.episode_step >= self.clip_length)
         dones |= ref_end
         
-        # 2. Timeout: t ≥ 500 (cyclic motions only)
-        timeout = self.is_cyclic & (self.episode_step >= 500)
-        dones |= timeout
-        
-        # 3. Early Termination: Invalid ground contact
         early_term = self._check_invalid_ground_contact()
         dones |= early_term
-        
-        return dones, dones
+
+        timeout = self.is_cyclic & (self.episode_step >= 500)
+
+        return dones, timeout
     
     def _check_invalid_ground_contact(self) -> torch.Tensor:
         """Check for invalid ground contact (e.g., torso hits ground while walking)."""

@@ -3,6 +3,7 @@ from isaaclab.sim import UsdFileCfg
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 import os
+import numpy as np
 from collections import deque
 
 HUMANOID_CONFIG = ArticulationCfg(
@@ -213,10 +214,41 @@ HUMANOID_CONFIG = ArticulationCfg(
 )
 
 class DiscriminatorBuffer:
-    def __init__(self, capacity):
+    def __init__(self, capacity, sequence_length=5):
         self.capacity = capacity
         self.buffer = deque(maxlen=capacity)
         self.position = 0
+        self.minibuffer = []
+        self.sequence_length = sequence_length
 
-    def push(self, state, action, value, advantage, log_prob, seq_len):
-        self.buffer.append((state, action, value, advantage, log_prob, seq_len))
+    def push(self, state, action, value, advantage, log_prob):
+        if len(self.minibuffer) < self.sequence_length:
+            self.minibuffer.append((state, action, value, advantage, log_prob))
+        else:
+            self.buffer.append(self.minibuffer)
+            self.minibuffer = []
+
+    def clear_minibuffer(self):
+        self.minibuffer = []
+
+class DiscriminatorBufferGroup:
+    def __init__(self, count=2, capacity=10000, sequence_length=5):
+        self.buffers = [DiscriminatorBuffer(capacity=capacity, sequence_length=sequence_length) for _ in range(count)]
+    
+    def push(self, state_group, action_group, value_group, advantage_group, log_prob_group):
+        states = np.array(state_group)
+        actions = np.array(action_group)
+        values = np.array(value_group)
+        advantages = np.array(advantage_group)
+        log_probs = np.array(log_prob_group)
+        
+        # Vectorized operation using numpy's vectorize
+        push_func = np.vectorize(lambda buffer, s, a, v, adv, lp: buffer.push(s, a, v, adv, lp))
+        push_func(self.buffers, states, actions, values, advantages, log_probs)
+    
+    def clear_minibuffer(self, done_group):
+        done_array = np.array(done_group, dtype=bool)
+        done_indices = np.where(done_array)[0]
+        
+        for idx in done_indices:
+            self.buffers[idx].clear_minibuffer()
