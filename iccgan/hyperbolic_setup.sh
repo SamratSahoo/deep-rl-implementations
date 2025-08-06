@@ -9,7 +9,7 @@ then
     conda init --all
 fi
 
-conda create -n iccgan python=3.10
+conda create -n iccgan python=3.10 -y
 source activate base
 conda activate iccgan
 

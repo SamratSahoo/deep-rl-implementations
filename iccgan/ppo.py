@@ -11,18 +11,21 @@ from isaac_utils import DiscriminatorBufferGroup
 
 class Agent(nn.Module):
     def __init__(self, envs):
-        self.critic = Critic(state_dim=np.array(envs.observation_space.shape).prod(), value_dim=1, hidden_size=256)
-        self.actor = Actor(state_dim=np.array(envs.observation_space.shape).prod(), action_dim=np.array(envs.action_space.shape).prod(), hidden_size=256, init_log_std=0.05)
+        super().__init__()
+        self.critic = Critic(state_dim=envs.observation_space.shape[-1], value_dim=1, hidden_size=256)
+        self.actor = Actor(state_dim=envs.observation_space.shape[-1], action_dim=envs.action_space.shape[-1], hidden_size=256, init_log_std=0.05)
     
     def get_value(self, state):
         value = self.critic(state)
         return value
     
-    def get_action_and_value(self, state):
+    def get_action_and_value(self, state, action=None):
         dist = self.actor(state)
-        action = dist.sample()
-
-        return action, dist.log_prob(action), dist.entropy().sum(dim=1), self.critic(state)
+        if action is None:
+            action = dist.sample()
+        
+        log_prob = dist.log_prob(action).sum(dim=-1)
+        return action, log_prob, dist.entropy().sum(dim=1), self.critic(state)
 
 class PPO:
     def __init__(
@@ -62,6 +65,7 @@ class PPO:
         self.log_root_path = os.path.abspath(self.log_root_path)
         self.num_steps = num_steps
         self.anneal_lr = anneal_lr
+        self.num_envs = num_envs
 
         random.seed(seed)
         np.random.seed(seed)
@@ -100,18 +104,20 @@ class PPO:
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
         self.discriminator = Discriminator(
-            state_dim=np.array(self.env.single_observation_space.shape).prod(), 
+            state_dim=self.env.observation_space.shape[-1], 
             num_discriminators=num_discriminators
         )
+        self.learning_rate = learning_rate
 
-        self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.discriminator_lr, eps=1e-5)
+        self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=discriminator_lr, eps=1e-5)
         self.lambda_gp = lambda_gp
 
-        self.minibuffer = deque(maxlen=5)
+        self.minibuffer = deque(maxlen=sequence_length)
     def train(self):
         optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
-        obs = torch.zeros((self.num_steps, self.num_envs) + self.env.single_observation_space.shape, dtype=torch.float).to(self.device)
-        actions = torch.zeros((self.num_steps, self.num_envs) + self.env.single_action_space.shape, dtype=torch.float).to(self.device)
+        obs = torch.zeros((self.num_steps, self.num_envs, self.env.observation_space.shape[-1]), dtype=torch.float).to(self.device)
+        temporal_obs = torch.zeros((self.num_steps, self.num_envs, self.sequence_length, self.env.observation_space.shape[-1]), dtype=torch.float).to(self.device)
+        actions = torch.zeros((self.num_steps, self.num_envs, self.env.action_space.shape[-1]), dtype=torch.float).to(self.device)
         logprobs = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float).to(self.device)
         rewards = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float).to(self.device)
         dones = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float).to(self.device)
@@ -119,7 +125,8 @@ class PPO:
         advantages = torch.zeros_like(rewards, dtype=torch.float).to(self.device)
         
         global_step = 0
-        next_obs = self.env.reset()
+        next_obs, _ = self.env.reset()
+        next_obs = next_obs["policy"]
         self.minibuffer.append(next_obs)
         next_done = torch.zeros(self.num_envs, dtype=torch.float).to(self.device)
 
@@ -135,23 +142,36 @@ class PPO:
                 dones[step] = next_done
 
                 with torch.no_grad():
-                    action, logprob, _, value = self.agent.get_action_and_value(next_obs)
+                    current_temporal_obs = torch.stack(list(self.minibuffer)).permute(1, 0, 2)
+                    temporal_obs[step] = current_temporal_obs
+                    action, logprob, _, value = self.agent.get_action_and_value(current_temporal_obs)
                     values[step] = value.flatten()
                 actions[step] = action
                 logprobs[step] = logprob
+                
+                self.discriminator_buffer_group.push(
+                    next_obs.cpu().numpy(),
+                    action.cpu().numpy(),
+                    value.cpu().numpy(),
+                    torch.zeros_like(value).cpu().numpy(),
+                    logprob.cpu().numpy()
+                )
 
-                next_obs, reward, terminations, truncations, infos = self.env.step(action.cpu().numpy())
+                next_obs, reward, terminations, truncations, infos = self.env.step(action)
+                next_obs = next_obs["policy"]
                 if len(self.minibuffer) < self.sequence_length:
                     imitation_reward = 0
                 else:
-                    imitation_reward = torch.clip(self.discriminator(torch.stack(self.minibuffer).unsqueeze(0)), -1, 1).mean()
+                    imitation_reward = torch.clip(
+                        self.discriminator(
+                            torch.stack(list(self.minibuffer)).unsqueeze(0)), -1, 1).mean()
                 
                 self.minibuffer.append(next_obs)
                 reward += imitation_reward
 
                 next_done = np.logical_or(terminations, truncations)
-                rewards[step] = torch.tensor(reward).to(self.device).view(-1)
-                next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor(next_done).to(self.device)
+                rewards[step] = torch.tensor(reward, device=self.device).view(-1)
+                next_obs, next_done = torch.tensor(next_obs, device=self.device), torch.tensor(next_done, device=self.device)
                 
                 self.discriminator_buffer_group.clear_minibuffer(next_done)
                 self.train_discriminator(next_done)
@@ -159,7 +179,8 @@ class PPO:
                 self.env.unwrapped._reset_idx(reset_indices)
 
                 with torch.no_grad():
-                    next_value = self.agent.get_value(next_obs).reshape(1, -1)
+                    current_temporal_obs = torch.stack(list(self.minibuffer)).permute(1, 0, 2)
+                    next_value = self.agent.get_value(current_temporal_obs).reshape(1, -1)
                     advantages = torch.zeros_like(rewards).to(self.device)
                     lastgaelam = 0
                     for t in reversed(range(self.num_steps)):
@@ -173,22 +194,29 @@ class PPO:
                         advantages[t] = lastgaelam = delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
                     returns = advantages + values
 
-                b_obs = obs.reshape((-1,) + self.env.single_observation_space.shape)
+                b_temporal_obs = temporal_obs.reshape((-1, self.sequence_length, self.env.observation_space.shape[-1]))
                 b_logprobs = logprobs.reshape(-1)
-                b_actions = actions.reshape((-1,) + self.env.single_action_space.shape)
+                b_actions = actions.reshape((-1,) + self.env.action_space.shape[-1])
                 b_advantages = advantages.reshape(-1)
                 b_returns = returns.reshape(-1)
                 b_values = values.reshape(-1)
 
                 b_inds = np.arange(self.batch_size)
                 clipfracs = []
+
+                # Don't train if we don't have the minimum number of observations
+                if len(self.minibuffer) < self.sequence_length:
+                    continue
+
                 for epoch in range(self.update_epochs):
                     np.random.shuffle(b_inds)
                     for start in range(0, self.batch_size, self.minibatch_size):
                         end = start + self.minibatch_size
                         mb_inds = b_inds[start:end]
 
-                        _, newlogprob, entropy, newvalue = self.agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                        _, newlogprob, entropy, newvalue = self.agent.get_action_and_value(
+                            b_temporal_obs[mb_inds], b_actions[mb_inds]
+                        )
                         logratio = newlogprob - b_logprobs[mb_inds]
                         ratio = logratio.exp()
 
@@ -233,8 +261,8 @@ class PPO:
                         break
         self.env.close()
     def train_discriminator(self, next_done):
-        policy_data = self.discriminator_buffer_group.buffers.sample(next_done)
-        expert_data = self.env.reference_motion.sample(64, sample_length=5)
+        policy_data, _, _, _, _ = self.discriminator_buffer_group.sample(64, next_done)
+        expert_data = self.env.unwrapped.reference_motion.sample(64, sample_length=self.sequence_length)
 
         alpha = torch.rand(expert_data.size(0), dtype=expert_data.dtype, device=expert_data.device)
         interpolated_data = alpha * expert_data + (1 - alpha) * policy_data
