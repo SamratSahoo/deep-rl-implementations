@@ -75,7 +75,7 @@ class Actor(nn.Module):
         return dist
 
 class Discriminator(nn.Module):
-    def __init__(self, state_dim, hidden_size=256):
+    def __init__(self, state_dim, hidden_size=256, num_discriminators=8):
         super().__init__()
         self.gru = nn.GRU(
             input_size=state_dim, hidden_size=hidden_size, batch_first=True
@@ -86,7 +86,7 @@ class Discriminator(nn.Module):
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 32)
+            nn.Linear(128, num_discriminators)
         )
 
         i = 0

@@ -116,7 +116,7 @@ class ReferenceMotion:
         
         return state_vector
 
-    def sample(self, num_samples, sample_length=4):
+    def sample(self, num_samples, sample_length=5):
         if len(self.frame_states) < sample_length:
             return []
         

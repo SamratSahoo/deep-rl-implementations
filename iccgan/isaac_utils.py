@@ -5,6 +5,8 @@ from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 import os
 import numpy as np
 from collections import deque
+import random
+import torch
 
 HUMANOID_CONFIG = ArticulationCfg(
     spawn=UsdFileCfg(
@@ -230,6 +232,9 @@ class DiscriminatorBuffer:
 
     def clear_minibuffer(self):
         self.minibuffer = []
+    
+    def sample(self, k):
+        return random.sample(self.buffer, k)
 
 class DiscriminatorBufferGroup:
     def __init__(self, count=2, capacity=10000, sequence_length=5):
@@ -250,5 +255,12 @@ class DiscriminatorBufferGroup:
         done_array = np.array(done_group, dtype=bool)
         done_indices = np.where(done_array)[0]
         
-        for idx in done_indices:
-            self.buffers[idx].clear_minibuffer()
+        clear_func = np.vectorize(lambda idx: self.buffers[idx].clear_minibuffer())
+        clear_func(done_indices)
+    
+    def sample(self, k, done_group):
+        done_array = np.array(done_group, dtype=bool)
+        done_indices = np.where(done_array)[0]
+
+        sample_func = np.vectorize(lambda idx: self.buffers[idx].sample(k // len(done_indices)))
+        return torch.stack(sample_func(done_indices))

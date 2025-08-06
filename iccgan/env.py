@@ -81,7 +81,6 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         self.episode_step = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
         self.reference_motion = None
 
-
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(size=(200,200)))
         
@@ -125,7 +124,6 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = self.action_scale * actions.clone()
-        # Increment episode step counter
         self.episode_step += 1
 
     def _get_observations(self) -> dict:
@@ -253,11 +251,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
     
     def _create_body_mapping(self) -> list:
         """Create body mapping based on actual articulation body names."""
-        # Get the actual body names from the articulation
-        body_names = self.humanoid.body_names
-        
-        # Create mapping from body names to motion data keys
-        # This maps each body to its corresponding motion data key
+        body_names = self.humanoid.body_names        
         body_mapping = [0] * len(body_names)
         
         for body_name in body_names:

@@ -1,6 +1,7 @@
+from collections import deque
 import os
 import torch.nn as nn
-from models import Actor, Critic
+from models import Actor, Critic, Discriminator
 import time
 import random
 import numpy as np
@@ -47,13 +48,17 @@ class PPO:
         video_length: int = 500,
         seed: int = 0,
         torch_deterministic: bool = False,
-        motion_file: str = "assets/motions/run.json"
+        motion_file: str = "assets/motions/run.json",
+        num_discriminators: int = 32,
+        discriminator_lr: float = 0.001,
+        lambda_gp: float = 10,
+        sequence_length: int = 5,
     ):
         self.batch_size = num_envs * num_steps
         self.minibatch_size = self.batch_size // num_minibatches
         self.num_iterations = total_timesteps // (self.batch_size)
         self.run_name = f"{int(time.time())}"
-        self.log_root_path = os.path.join("logs", self.run_name)
+        self.log_root_path = os.path.join("logs", "iccgan", self.run_name)
         self.log_root_path = os.path.abspath(self.log_root_path)
         self.num_steps = num_steps
         self.anneal_lr = anneal_lr
@@ -82,8 +87,8 @@ class PPO:
         self.env = gym.wrappers.RecordVideo(self.env, **video_kwargs)
 
         self.agent = Agent(self.env)
-        # 1 discriminator buffer for each environment instance
-        self.discriminator_buffer_group = DiscriminatorBufferGroup(count=num_envs, capacity=10000)
+        self.sequence_length = sequence_length
+        self.discriminator_buffer_group = DiscriminatorBufferGroup(count=num_envs, capacity=10000, sequence_length=sequence_length)
 
         self.gamma = gamma
         self.gae_lambda = gae_lambda
@@ -94,7 +99,15 @@ class PPO:
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
-    
+        self.discriminator = Discriminator(
+            state_dim=np.array(self.env.single_observation_space.shape).prod(), 
+            num_discriminators=num_discriminators
+        )
+
+        self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.discriminator_lr, eps=1e-5)
+        self.lambda_gp = lambda_gp
+
+        self.minibuffer = deque(maxlen=5)
     def train(self):
         optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
         obs = torch.zeros((self.num_steps, self.num_envs) + self.env.single_observation_space.shape, dtype=torch.float).to(self.device)
@@ -107,6 +120,7 @@ class PPO:
         
         global_step = 0
         next_obs = self.env.reset()
+        self.minibuffer.append(next_obs)
         next_done = torch.zeros(self.num_envs, dtype=torch.float).to(self.device)
 
         for iteration in range(1, self.num_iterations+1):
@@ -127,11 +141,20 @@ class PPO:
                 logprobs[step] = logprob
 
                 next_obs, reward, terminations, truncations, infos = self.env.step(action.cpu().numpy())
+                if len(self.minibuffer) < self.sequence_length:
+                    imitation_reward = 0
+                else:
+                    imitation_reward = torch.clip(self.discriminator(torch.stack(self.minibuffer).unsqueeze(0)), -1, 1).mean()
+                
+                self.minibuffer.append(next_obs)
+                reward += imitation_reward
+
                 next_done = np.logical_or(terminations, truncations)
                 rewards[step] = torch.tensor(reward).to(self.device).view(-1)
                 next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor(next_done).to(self.device)
                 
                 self.discriminator_buffer_group.clear_minibuffer(next_done)
+                self.train_discriminator(next_done)
 
                 with torch.no_grad():
                     next_value = self.agent.get_value(next_obs).reshape(1, -1)
@@ -206,3 +229,28 @@ class PPO:
 
                     if self.target_kl is not None and approx_kl > self.target_kl:
                         break
+    
+    def train_discriminator(self, next_done):
+        policy_data = self.discriminator_buffer_group.buffers.sample(next_done)
+        expert_data = self.env.reference_motion.sample(64, sample_length=5)
+
+        alpha = torch.rand(expert_data.size(0), dtype=expert_data.dtype, device=expert_data.device)
+        interpolated_data = alpha * expert_data + (1 - alpha) * policy_data
+        interpolated_data.requires_grad = True
+
+        dout = self.discriminator(interpolated_data)
+        gradient = torch.autograd.grad(
+            dout, interpolated_data, torch.ones_like(dout),
+                retain_graph=True, create_graph=True, only_inputs=True
+            )[0]
+        
+        gradient_penalty = ((gradient.norm(2, dim=1) - 1) ** 2).sum()
+        zero_tensor = torch.zeros_like(policy_data)
+        one_tensor = torch.ones_like(policy_data)
+        hinge_loss = torch.maximum(zero_tensor, one_tensor + self.discriminator(policy_data).sum() 
+            + torch.maximum(zero_tensor, one_tensor-self.discriminator(expert_data).sum()))
+
+        total_loss = (hinge_loss + self.lambda_gp * gradient_penalty) / self.num_discriminators
+        self.discriminator_optimizer.zero_grad()
+        total_loss.backward()
+        self.discriminator_optimizer.step()
