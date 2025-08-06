@@ -57,8 +57,8 @@ class PPO:
         self.batch_size = num_envs * num_steps
         self.minibatch_size = self.batch_size // num_minibatches
         self.num_iterations = total_timesteps // (self.batch_size)
-        self.run_name = f"{int(time.time())}"
-        self.log_root_path = os.path.join("logs", "iccgan", self.run_name)
+        self.run_name = time.strftime("%Y-%m-%d_%H-%M-%S")
+        self.log_root_path = os.path.join("logs", self.run_name)
         self.log_root_path = os.path.abspath(self.log_root_path)
         self.num_steps = num_steps
         self.anneal_lr = anneal_lr
@@ -79,7 +79,7 @@ class PPO:
         )
 
         video_kwargs = {
-            "video_folder": os.path.join(self.log_root_path, time.strftime("%Y-%m-%d_%H-%M-%S"), "videos", "train"),
+            "video_folder": os.path.join(self.log_root_path, "videos", "train"),
             "step_trigger": lambda step: step % video_interval == 0,
             "video_length": video_length,
             "disable_logger": True,
@@ -155,6 +155,8 @@ class PPO:
                 
                 self.discriminator_buffer_group.clear_minibuffer(next_done)
                 self.train_discriminator(next_done)
+                reset_indices = torch.nonzero(next_done, as_tuple=True)[0]
+                self.env.unwrapped._reset_idx(reset_indices)
 
                 with torch.no_grad():
                     next_value = self.agent.get_value(next_obs).reshape(1, -1)
@@ -229,7 +231,7 @@ class PPO:
 
                     if self.target_kl is not None and approx_kl > self.target_kl:
                         break
-    
+        self.env.close()
     def train_discriminator(self, next_done):
         policy_data = self.discriminator_buffer_group.buffers.sample(next_done)
         expert_data = self.env.reference_motion.sample(64, sample_length=5)

@@ -26,6 +26,7 @@ from env import ICCGANHumanoidEnv, ICCGANHumanoidEnvCfg
 import torch
 import time
 import numpy as np
+from ppo import PPO
 
 gym.register(
         id="Isaac-ICCGAN-v0",
@@ -37,32 +38,37 @@ gym.register(
     )
 
 def main():
-    env = gym.make("Isaac-ICCGAN-v0", disable_env_checker=True, 
-        render_mode="rgb_array" if args_cli.video else None,
-        num_envs=4, motion_file="assets/motions/run.json"
+    ppo = PPO(
+        num_envs=4,
     )
 
-    log_root_path = os.path.join("logs", "iccgan")
-    log_root_path = os.path.abspath(log_root_path)
+    ppo.train()
+    # env = gym.make("Isaac-ICCGAN-v0", disable_env_checker=True, 
+    #     render_mode="rgb_array" if args_cli.video else None,
+    #     num_envs=4, motion_file="assets/motions/run.json"
+    # )
 
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_root_path, time.strftime("%Y-%m-%d_%H-%M-%S"), "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+    # log_root_path = os.path.join("logs", "iccgan")
+    # log_root_path = os.path.abspath(log_root_path)
 
-    env.reset()
-    i = 0
-    while simulation_app.is_running() and i < 1000:
-        next_state, reward, done, truncated, info = env.step(torch.randn(env.action_space.shape))
-        reset_indices = torch.nonzero(torch.logical_or(done, truncated), as_tuple=True)[0]
-        env.unwrapped._reset_idx(reset_indices)
-        i += 1
+    # if args_cli.video:
+    #     video_kwargs = {
+    #         "video_folder": os.path.join(log_root_path, time.strftime("%Y-%m-%d_%H-%M-%S"), "videos", "train"),
+    #         "step_trigger": lambda step: step % args_cli.video_interval == 0,
+    #         "video_length": args_cli.video_length,
+    #         "disable_logger": True,
+    #     }
+    #     env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    # env.reset()
+    # i = 0
+    # while simulation_app.is_running() and i < 1000:
+    #     next_state, reward, done, truncated, info = env.step(torch.randn(env.action_space.shape))
+    #     reset_indices = torch.nonzero(torch.logical_or(done, truncated), as_tuple=True)[0]
+    #     env.unwrapped._reset_idx(reset_indices)
+    #     i += 1
     
-    env.close()
+    # env.close()
     simulation_app.close()
 
 if __name__ == "__main__":
