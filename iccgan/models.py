@@ -40,7 +40,6 @@ class Actor(nn.Module):
             input_size=state_dim, hidden_size=hidden_size, batch_first=True
         )
 
-
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, 1024),
             nn.ReLU(),
@@ -59,15 +58,23 @@ class Actor(nn.Module):
                 torch.nn.init.normal_(param, mean=0.0, std=0.05)
             elif "bias" in name:
                 torch.nn.init.constant_(param, 0)
+
+        # for name, param in self.gru.named_parameters():
+        #     if 'weight_ih' in name:
+        #         torch.nn.init.xavier_uniform_(param.data)
+        #     elif 'weight_hh' in name:
+        #         torch.nn.init.orthogonal_(param.data)
+        #     elif 'bias' in name:
+        #         param.data.fill_(0)
+
     
-    def forward(self, sequence,):
+    def forward(self, sequence):
         if sequence.ndim == 2:
             sequence = sequence.unsqueeze(0)
+        
         out, hidden = self.gru(sequence)
-
         out = out[:, -1, :]
         out = self.mlp(out)
-
         mu = self.policy_mu(out)
         log_sigma = self.policy_log_sigma(out)
 

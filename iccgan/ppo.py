@@ -9,11 +9,72 @@ import torch
 import gymnasium as gym
 from isaac_utils import DiscriminatorBufferGroup
 
+class FeatureNormalizer:
+    """Normalizes features using running mean and standard deviation."""
+    
+    def __init__(self, feature_dim, epsilon=1e-8, decay=0.999):
+        self.feature_dim = feature_dim
+        self.epsilon = epsilon
+        self.decay = decay
+        
+        self.running_mean = torch.zeros(feature_dim, dtype=torch.float32)
+        self.running_var = torch.ones(feature_dim, dtype=torch.float32)
+        self.running_count = 0
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    def update(self, features):
+        """Update running statistics with new features."""
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features).to(self.device)
+        
+        if features.dim() == 1:
+            features = features.unsqueeze(0) # (batch_size, feature_dim)
+        elif features.dim() > 2:
+            features = features.reshape(-1, features.shape[-1]) # Flatten
+        
+        batch_size = features.shape[0]
+        
+        if self.running_count == 0: # First batch
+            self.running_mean = features.mean(dim=0).to(self.device)
+            self.running_var = features.var(dim=0, unbiased=False).to(self.device)
+        else: # Running batches
+            batch_mean = features.mean(dim=0).to(self.device)
+            batch_var = features.var(dim=0, unbiased=False).to(self.device)
+            
+            self.running_mean = self.decay * self.running_mean + (1 - self.decay) * batch_mean
+            self.running_var = self.decay * self.running_var + (1 - self.decay) * batch_var
+        
+        self.running_count += batch_size
+    
+    def normalize(self, features):
+        """Normalize features using current running statistics."""
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features).to(self.device)
+        
+        original_shape = features.shape
+        
+        if features.dim() == 1: 
+            features = features.unsqueeze(0) # (batch_size, feature_dim)
+        elif features.dim() > 2:
+            features = features.reshape(-1, features.shape[-1]) # Flatten
+        
+        normalized = (features - self.running_mean) / (torch.sqrt(self.running_var) + self.epsilon)
+        normalized = normalized.reshape(original_shape)
+        
+        return normalized
+    
+    def to(self, device):
+        """Move normalizer to specified device."""
+        self.running_mean = self.running_mean.to(device)
+        self.running_var = self.running_var.to(device)
+        return self
+
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        self.critic = Critic(state_dim=envs.observation_space.shape[-1], value_dim=1, hidden_size=256)
-        self.actor = Actor(state_dim=envs.observation_space.shape[-1], action_dim=envs.action_space.shape[-1], hidden_size=256, init_log_std=0.05)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.critic = Critic(state_dim=envs.observation_space.shape[-1], value_dim=1, hidden_size=256).to(self.device)
+        self.actor = Actor(state_dim=envs.observation_space.shape[-1], action_dim=envs.action_space.shape[-1], hidden_size=256, init_log_std=0.05).to(self.device)
     
     def get_value(self, state):
         value = self.critic(state)
@@ -91,6 +152,7 @@ class PPO:
         self.env = gym.wrappers.RecordVideo(self.env, **video_kwargs)
 
         self.agent = Agent(self.env)
+        self.agent.to(self.device)
         self.sequence_length = sequence_length
         self.discriminator_buffer_group = DiscriminatorBufferGroup(count=num_envs, capacity=10000, sequence_length=sequence_length)
 
@@ -103,16 +165,22 @@ class PPO:
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
+        self.target_kl = target_kl
+        
         self.discriminator = Discriminator(
             state_dim=self.env.observation_space.shape[-1], 
             num_discriminators=num_discriminators
         )
+        self.discriminator.to(self.device)
         self.learning_rate = learning_rate
 
         self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=discriminator_lr, eps=1e-5)
         self.lambda_gp = lambda_gp
 
         self.minibuffer = deque(maxlen=sequence_length)
+        
+        obs_dim = self.env.observation_space.shape[-1]
+        self.feature_normalizer = FeatureNormalizer(feature_dim=obs_dim).to(self.device)
     def train(self):
         optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.learning_rate, eps=1e-5)
         obs = torch.zeros((self.num_steps, self.num_envs, self.env.observation_space.shape[-1]), dtype=torch.float).to(self.device)
@@ -127,6 +195,9 @@ class PPO:
         global_step = 0
         next_obs, _ = self.env.reset()
         next_obs = next_obs["policy"]
+        
+        self.feature_normalizer.update(next_obs)
+        
         self.minibuffer.append(next_obs)
         next_done = torch.zeros(self.num_envs, dtype=torch.float).to(self.device)
 
@@ -142,10 +213,19 @@ class PPO:
                 dones[step] = next_done
 
                 with torch.no_grad():
-                    current_temporal_obs = torch.stack(list(self.minibuffer)).permute(1, 0, 2)
+                    if len(self.minibuffer) < self.sequence_length:
+                        current_obs = torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)
+                        padding_size = self.sequence_length - len(self.minibuffer)
+                        zero_padding = torch.zeros(self.num_envs, padding_size, self.env.observation_space.shape[-1], device=self.device)
+                        current_temporal_obs = torch.cat([zero_padding, current_obs], dim=1)
+                    else:
+                        current_temporal_obs = torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)
+                    
+                    normalized_temporal_obs = self.feature_normalizer.normalize(current_temporal_obs)
                     temporal_obs[step] = current_temporal_obs
-                    action, logprob, _, value = self.agent.get_action_and_value(current_temporal_obs)
-                    values[step] = value.flatten()
+                    action, logprob, _, value = self.agent.get_action_and_value(normalized_temporal_obs)
+                    values[step] = value.flatten().to(self.device)
+
                 actions[step] = action
                 logprobs[step] = logprob
                 
@@ -159,14 +239,19 @@ class PPO:
 
                 next_obs, reward, terminations, truncations, infos = self.env.step(action)
                 next_obs = next_obs["policy"]
+                
+                self.feature_normalizer.update(next_obs)
+                
                 if len(self.minibuffer) < self.sequence_length:
                     imitation_reward = 0
                 else:
                     imitation_reward = torch.clip(
                         self.discriminator(
-                            torch.stack(list(self.minibuffer)).unsqueeze(0)), -1, 1).mean()
+                            torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)) # (num_envs, sequence_length, obs_dim)
+                        , -1, 1).mean()
                 
                 self.minibuffer.append(next_obs)
+                reward = reward.to(self.device)
                 reward += imitation_reward
 
                 next_done = np.logical_or(terminations, truncations)
@@ -176,27 +261,35 @@ class PPO:
                 self.discriminator_buffer_group.clear_minibuffer(next_done)
                 self.train_discriminator(next_done)
                 reset_indices = torch.nonzero(next_done, as_tuple=True)[0]
-                self.env.unwrapped._reset_idx(reset_indices)
+                self.env.unwrapped._reset_idx(reset_indices.cpu())
 
                 with torch.no_grad():
-                    current_temporal_obs = torch.stack(list(self.minibuffer)).permute(1, 0, 2)
-                    next_value = self.agent.get_value(current_temporal_obs).reshape(1, -1)
+                    if len(self.minibuffer) < self.sequence_length:
+                        current_obs = torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)
+                        padding_size = self.sequence_length - len(self.minibuffer)
+                        zero_padding = torch.zeros(self.num_envs, padding_size, self.env.observation_space.shape[-1], device=self.device)
+                        current_temporal_obs = torch.cat([zero_padding, current_obs], dim=1)
+                    else:
+                        current_temporal_obs = torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)
+                    
+                    normalized_temporal_obs = self.feature_normalizer.normalize(current_temporal_obs)
+                    next_value = self.agent.get_value(normalized_temporal_obs).reshape(1, -1)
                     advantages = torch.zeros_like(rewards).to(self.device)
                     lastgaelam = 0
                     for t in reversed(range(self.num_steps)):
                         if t == self.num_steps - 1:
-                            nextnonterminal = 1.0 - next_done
-                            nextvalues = next_value
+                            nextnonterminal = (1.0 - next_done).to(self.device)
+                            nextvalues = next_value.to(self.device)
                         else:
-                            nextnonterminal = 1.0 - dones[t + 1]
-                            nextvalues = values[t + 1]
+                            nextnonterminal = (1.0 - dones[t + 1]).to(self.device)
+                            nextvalues = values[t + 1].to(self.device)
                         delta = rewards[t] + self.gamma * nextvalues * nextnonterminal - values[t]
                         advantages[t] = lastgaelam = delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
                     returns = advantages + values
 
                 b_temporal_obs = temporal_obs.reshape((-1, self.sequence_length, self.env.observation_space.shape[-1]))
                 b_logprobs = logprobs.reshape(-1)
-                b_actions = actions.reshape((-1,) + self.env.action_space.shape[-1])
+                b_actions = actions.reshape((-1, self.env.action_space.shape[-1]))
                 b_advantages = advantages.reshape(-1)
                 b_returns = returns.reshape(-1)
                 b_values = values.reshape(-1)
@@ -214,8 +307,9 @@ class PPO:
                         end = start + self.minibatch_size
                         mb_inds = b_inds[start:end]
 
+                        normalized_b_temporal_obs = self.feature_normalizer.normalize(b_temporal_obs[mb_inds])
                         _, newlogprob, entropy, newvalue = self.agent.get_action_and_value(
-                            b_temporal_obs[mb_inds], b_actions[mb_inds]
+                            normalized_b_temporal_obs, b_actions[mb_inds]
                         )
                         logratio = newlogprob - b_logprobs[mb_inds]
                         ratio = logratio.exp()
@@ -261,8 +355,14 @@ class PPO:
                         break
         self.env.close()
     def train_discriminator(self, next_done):
+        done_indices = np.where(np.array(next_done.cpu().numpy(), dtype=bool))[0]
+        if len(done_indices) == 0:
+            return
+
         policy_data, _, _, _, _ = self.discriminator_buffer_group.sample(64, next_done)
-        expert_data = self.env.unwrapped.reference_motion.sample(64, sample_length=self.sequence_length)
+        print("YEEHAW",policy_data.shape)
+        expert_data = torch.tensor(self.env.unwrapped.reference_motion.sample(64, sample_length=self.sequence_length))
+        print("YEEHAW2",expert_data.shape)
 
         alpha = torch.rand(expert_data.size(0), dtype=expert_data.dtype, device=expert_data.device)
         interpolated_data = alpha * expert_data + (1 - alpha) * policy_data

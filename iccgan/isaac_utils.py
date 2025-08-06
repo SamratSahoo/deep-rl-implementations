@@ -234,7 +234,7 @@ class DiscriminatorBuffer:
         self.minibuffer = []
     
     def sample(self, k):
-        return random.sample(self.buffer, k)
+        return random.choices(self.buffer, k=k)
 
 class DiscriminatorBufferGroup:
     def __init__(self, count=2, capacity=10000, sequence_length=5):
@@ -271,7 +271,7 @@ class DiscriminatorBufferGroup:
             samples_per_buffer = max(1, k // len(done_indices))            
             sample_func = np.frompyfunc(lambda idx: self.buffers[idx].sample(samples_per_buffer), 1, 1)
             sampled_arrays = sample_func(done_indices)
-            
+            print([a.shape for a in sampled_arrays])
             sampled_data = np.concatenate(sampled_arrays)
             
             data_array = np.array(sampled_data, dtype=object)
