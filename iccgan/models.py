@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-
-
 class Critic(nn.Module):
     def __init__(self, state_dim, value_dim=1, hidden_size=256):
         super().__init__()
@@ -59,13 +57,13 @@ class Actor(nn.Module):
             elif "bias" in name:
                 torch.nn.init.constant_(param, 0)
 
-        # for name, param in self.gru.named_parameters():
-        #     if 'weight_ih' in name:
-        #         torch.nn.init.xavier_uniform_(param.data)
-        #     elif 'weight_hh' in name:
-        #         torch.nn.init.orthogonal_(param.data)
-        #     elif 'bias' in name:
-        #         param.data.fill_(0)
+        for name, param in self.gru.named_parameters():
+            if 'weight_ih' in name:
+                torch.nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                torch.nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
 
     
     def forward(self, sequence):
@@ -77,8 +75,7 @@ class Actor(nn.Module):
         out = self.mlp(out)
         mu = self.policy_mu(out)
         log_sigma = self.policy_log_sigma(out)
-
-        dist = torch.distributions.normal.Normal(loc=mu, scale=log_sigma.exp())
+        dist = torch.distributions.normal.Normal(loc=mu, scale=torch.clamp(log_sigma, -11, 14).exp() + 1e-6)
         return dist
 
 class Discriminator(nn.Module):

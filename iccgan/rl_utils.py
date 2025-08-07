@@ -271,7 +271,6 @@ class DiscriminatorBufferGroup:
             samples_per_buffer = max(1, k // len(done_indices))            
             sample_func = np.frompyfunc(lambda idx: self.buffers[idx].sample(samples_per_buffer), 1, 1)
             sampled_arrays = sample_func(done_indices)
-            print([a.shape for a in sampled_arrays])
             sampled_data = np.concatenate(sampled_arrays)
             
             data_array = np.array(sampled_data, dtype=object)
@@ -292,3 +291,63 @@ class DiscriminatorBufferGroup:
                     torch.tensor(log_probs))            
         else:
             return torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
+
+class FeatureNormalizer:
+    """Normalizes features using running mean and standard deviation."""
+    
+    def __init__(self, feature_dim, epsilon=1e-8, decay=0.999):
+        self.feature_dim = feature_dim
+        self.epsilon = epsilon
+        self.decay = decay
+        
+        self.running_mean = torch.zeros(feature_dim, dtype=torch.float32)
+        self.running_var = torch.ones(feature_dim, dtype=torch.float32)
+        self.running_count = 0
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    def update(self, features):
+        """Update running statistics with new features."""
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features).to(self.device)
+        
+        if features.dim() == 1:
+            features = features.unsqueeze(0) # (batch_size, feature_dim)
+        elif features.dim() > 2:
+            features = features.reshape(-1, features.shape[-1]) # Flatten
+        
+        batch_size = features.shape[0]
+        
+        if self.running_count == 0: # First batch
+            self.running_mean = features.mean(dim=0).to(self.device)
+            self.running_var = features.var(dim=0, unbiased=False).to(self.device)
+        else: # Running batches
+            batch_mean = features.mean(dim=0).to(self.device)
+            batch_var = features.var(dim=0, unbiased=False).to(self.device)
+            
+            self.running_mean = self.decay * self.running_mean + (1 - self.decay) * batch_mean
+            self.running_var = self.decay * self.running_var + (1 - self.decay) * batch_var
+        
+        self.running_count += batch_size
+    
+    def normalize(self, features):
+        """Normalize features using current running statistics."""
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features).to(self.device)
+        
+        original_shape = features.shape
+        
+        if features.dim() == 1: 
+            features = features.unsqueeze(0) # (batch_size, feature_dim)
+        elif features.dim() > 2:
+            features = features.reshape(-1, features.shape[-1]) # Flatten
+        
+        normalized = (features - self.running_mean) / (torch.sqrt(self.running_var) + self.epsilon)
+        normalized = normalized.reshape(original_shape)
+        
+        return normalized
+    
+    def to(self, device):
+        """Move normalizer to specified device."""
+        self.running_mean = self.running_mean.to(device)
+        self.running_var = self.running_var.to(device)
+        return self

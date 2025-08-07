@@ -5,7 +5,7 @@ import os
 import json
 from typing import Dict, List, Optional
 from quat_utils import quaternion_to_euler
-from isaac_utils import HUMANOID_CONFIG
+from rl_utils import HUMANOID_CONFIG
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from gymnasium import spaces
 import numpy as np
@@ -191,29 +191,39 @@ class ICCGANHumanoidEnv(DirectRLEnv):
             'left_knee'
         ]
         
-        num_joints = self.humanoid.data.joint_pos_target.shape[1]
-        
+        num_joints = self.humanoid.data.joint_pos_target.shape[1]  # total DOFs
         joint_targets = torch.zeros((self.num_envs, num_joints), device=self.device)
-        
+
         action_idx = 0
-        joint_idx = 0
-        
-        for spherical_group in spherical_joint_groups:
-            quat = self.actions[:, action_idx:action_idx + 4]  # (num_envs, 4)
-            euler_angles = quaternion_to_euler(quat)
-            
-            for i in range(3):
-                joint_targets[:, joint_idx] = euler_angles[:, i]
-                joint_idx += 1
-            
+        dof_idx = 0
+
+        # --- Spherical joints: convert 4D quaternion → 3D expmap ---
+        for _ in spherical_joint_groups:
+            q = self.actions[:, action_idx:action_idx+4]   # (num_envs, 4)
             action_idx += 4
-        
-        for revolute_joint in revolute_joints:
-            joint_targets[:, joint_idx] = self.actions[:, action_idx]
-            joint_idx += 1
+
+            # Unpack quaternion; adjust ordering if yours is (x,y,z,w)
+            qw = q[:, 0]
+            qv = q[:, 1:]  # (num_envs, 3)
+
+            # Compute exponential map (axis-angle vector)
+            angle = 2.0 * torch.acos(qw.clamp(-1,1))             # (num_envs,)
+            sin_half = torch.sqrt((1 - qw*qw).clamp(min=1e-6))   # (num_envs,)
+            axis = qv / sin_half.unsqueeze(-1)                   # (num_envs,3)
+
+            expmap = axis * angle.unsqueeze(-1)                  # (num_envs,3)
+
+            # Fill in those 3 DOF slots
+            joint_targets[:, dof_idx:dof_idx+3] = expmap
+            dof_idx += 3
+
+        # --- Revolute joints: 1D angle target directly ---
+        for _ in revolute_joints:
+            joint_targets[:, dof_idx] = self.actions[:, action_idx]
+            dof_idx += 1
             action_idx += 1
-        
-        # Apply joint position targets
+
+        # Finally assign to the articulation buffer
         self.humanoid.data.joint_pos_target = joint_targets
 
     def _get_dones(self) -> dict:
