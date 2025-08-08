@@ -264,33 +264,96 @@ class DiscriminatorBufferGroup:
             np.frompyfunc(lambda idx: self.buffers[idx].clear_minibuffer(), 1, 0)(done_indices)
     
     def sample(self, k, done_group):
-        done_array = np.array(done_group.cpu().numpy(), dtype=bool)
-        done_indices = np.where(done_array)[0]
-
-        if len(done_indices) > 0:
-            samples_per_buffer = max(1, k // len(done_indices))            
-            sample_func = np.frompyfunc(lambda idx: self.buffers[idx].sample(samples_per_buffer), 1, 1)
-            sampled_arrays = sample_func(done_indices)
-            sampled_data = np.concatenate(sampled_arrays)
-            
-            data_array = np.array(sampled_data, dtype=object)
-            structured_data = np.array(data_array, dtype=[
-                ('state', object), ('action', object), ('value', object), 
-                ('advantage', object), ('log_prob', object)
-            ])
-            
-            # Use numpy's field access for vectorized extraction
-            states = np.array(structured_data['state'])
-            actions = np.array(structured_data['action'])
-            values = np.array(structured_data['value'])
-            advantages = np.array(structured_data['advantage'])
-            log_probs = np.array(structured_data['log_prob'])
-            
-            return (torch.tensor(states), torch.tensor(actions), 
-                    torch.tensor(values), torch.tensor(advantages), 
-                    torch.tensor(log_probs))            
+        """
+        Samples k samples from the buffers. The buffers are sampled based on the done_group.
+        The done_group is a tensor of boolean values, where True indicates which buffers we want to sample from.
+        Each buffer is sampled with a number of samples equal to (k // number) of True values in done_group.
+        This method should only use vectorized operations. No for loops or list comprehensions allowed
+        """
+        # Convert mask to numpy boolean array
+        if torch.is_tensor(done_group):
+            done_array = done_group.detach().cpu().numpy().astype(bool)
         else:
-            return torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
+            done_array = np.array(done_group, dtype=bool)
+
+        selected_indices = np.where(done_array)[0]
+        # Filter out buffers with zero stored sequences
+        non_empty_mask = np.frompyfunc(lambda idx: len(self.buffers[int(idx)].buffer) > 0, 1, 1)(selected_indices)
+        if isinstance(non_empty_mask, np.ndarray):
+            non_empty_mask = non_empty_mask.astype(bool)
+        else:
+            non_empty_mask = np.array(non_empty_mask, dtype=bool)
+        selected_indices = selected_indices[non_empty_mask]
+        num_selected = int(selected_indices.shape[0])
+
+        if num_selected == 0:
+            raise ValueError("No buffers selected by done_group to sample from.")
+
+        samples_per_buffer = k // num_selected
+        if samples_per_buffer <= 0:
+            raise ValueError("Requested k is too small relative to number of selected buffers.")
+
+        # Sample sequences from each selected buffer using vectorized ufunc
+        sampled_per_buffer = np.frompyfunc(
+            lambda idx: self.buffers[int(idx)].sample(samples_per_buffer), 1, 1
+        )(selected_indices)
+
+        # Convert each per-buffer list to a 1D object array and stack into a 2D matrix, then flatten
+        sampled_arrays = np.frompyfunc(lambda lst: np.array(lst, dtype=object), 1, 1)(sampled_per_buffer)
+        if sampled_arrays.size == 0:
+            raise ValueError("Sampling produced no sequences. Check buffer contents and k.")
+        samples_matrix = np.stack(sampled_arrays.tolist(), axis=0)  # shape: (num_selected, samples_per_buffer)
+        flat_samples = samples_matrix.reshape(-1)  # shape: (num_selected * samples_per_buffer,)
+        print(type(flat_samples[0]), flat_samples[0])
+        if flat_samples.size == 0:
+            raise ValueError("Sampling produced no sequences. Check buffer contents and k.")
+
+        # Helper to extract a stacked tensor for a specific field index from each sequence
+        def stack_field_from_sequence(sequence, field_index):
+            # Normalize to a list of timesteps
+            if isinstance(sequence, tuple) and len(sequence) == 5:
+                timesteps = [sequence]
+            elif isinstance(sequence, list):
+                timesteps = sequence
+            else:
+                arr = np.array(sequence, dtype=object)
+                if arr.ndim == 0:
+                    timesteps = [arr.item()]
+                else:
+                    timesteps = arr.tolist()
+
+            ts_arr = np.array(timesteps, dtype=object)
+            # Extract the specified field for each timestep; if an element isn't indexable, treat it as already the field
+            extractor = np.frompyfunc(
+                lambda ts: ts[field_index] if isinstance(ts, (tuple, list)) else ts,
+                1,
+                1,
+            )
+            field_values = extractor(ts_arr)
+            return np.stack(field_values.tolist(), axis=0)
+
+        # Vectorized extraction for all sequences
+        states_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 0), 1, 1)(flat_samples)
+        actions_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 1), 1, 1)(flat_samples)
+        values_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 2), 1, 1)(flat_samples)
+        advantages_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 3), 1, 1)(flat_samples)
+        log_probs_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 4), 1, 1)(flat_samples)
+
+        # Stack across sequences to form final arrays
+        states = np.stack(states_per_seq.tolist(), axis=0)
+        actions = np.stack(actions_per_seq.tolist(), axis=0)
+        values = np.stack(values_per_seq.tolist(), axis=0)
+        advantages = np.stack(advantages_per_seq.tolist(), axis=0)
+        log_probs = np.stack(log_probs_per_seq.tolist(), axis=0)
+
+        # Convert to torch tensors (CPU, float32)
+        states_t = torch.tensor(states, dtype=torch.float32)
+        actions_t = torch.tensor(actions, dtype=torch.float32)
+        values_t = torch.tensor(values, dtype=torch.float32)
+        advantages_t = torch.tensor(advantages, dtype=torch.float32)
+        log_probs_t = torch.tensor(log_probs, dtype=torch.float32)
+
+        return states_t, actions_t, values_t, advantages_t, log_probs_t
 
 class FeatureNormalizer:
     """Normalizes features using running mean and standard deviation."""
