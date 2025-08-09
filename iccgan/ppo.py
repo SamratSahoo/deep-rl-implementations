@@ -307,7 +307,7 @@ class PPO:
                         break
         self.env.close()
     def train_discriminator(self, next_done):
-        if next_done.sum() == 0 or len(self.minibuffer) < self.sequence_length:
+        if next_done.sum() == 0:
             return
         
         policy_data, _, _, _, _ = self.discriminator_buffer_group.sample(self.discriminator_batch_size, next_done)

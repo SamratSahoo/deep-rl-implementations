@@ -39,7 +39,7 @@ gym.register(
 
 def main():
     ppo = PPO(
-        num_envs=128,
+        num_envs=16,
     )
 
     ppo.train()
