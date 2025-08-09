@@ -190,7 +190,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
             action_idx += 4
             q = F.normalize(q, p=2, dim=1)
 
-            # Unpack quaternion as (w, x, y, z)
+            # Unpack quaternion
             qw = q[:, 0]
             qv = q[:, 1:]  # (num_envs, 3)
 
@@ -199,11 +199,11 @@ class ICCGANHumanoidEnv(DirectRLEnv):
             qv = qv * sign.unsqueeze(-1)
 
             # Compute exponential map
-            angle = 2.0 * torch.acos(qw.clamp(-1.0, 1.0))            # in [0, π]
+            angle = 2.0 * torch.acos(qw.clamp(-1.0, 1.0))            # [0, π]
             sin_half = torch.sqrt((1.0 - qw * qw).clamp(min=1e-12))  # (num_envs,)
             axis = qv / sin_half.unsqueeze(-1)                       # (num_envs,3)
 
-            expmap = axis * angle.unsqueeze(-1)                  # (num_envs,3)
+            expmap = axis * angle.unsqueeze(-1) # (num_envs,3)
 
             # Wrap to [-π, π]
             expmap = ((expmap + torch.pi) % (2.0 * torch.pi)) - torch.pi
@@ -250,7 +250,7 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         for idx in invalid_contact_indices:
             if idx < positions.shape[1]:  # Ensure index is valid
                 # Check if this link is too close to ground
-                link_too_low = positions[:, idx, 2] < ground_height + 0.15  # 15cm threshold
+                link_too_low = positions[:, idx, 2] < ground_height
                 invalid_contact |= link_too_low
         
         invalid_contact &= (self.episode_step > 10)

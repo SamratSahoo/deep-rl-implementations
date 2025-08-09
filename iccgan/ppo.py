@@ -196,6 +196,7 @@ class PPO:
                             torch.stack(list(self.minibuffer)).to(self.device).permute(1, 0, 2)) # (num_envs, sequence_length, obs_dim)
                         , -1, 1).mean()
                 
+                self.writer.add_scalar("ppo/imitation_reward", imitation_reward, self.global_step)
                 self.minibuffer.append(next_obs)
                 reward = reward.to(self.device)
                 reward += imitation_reward

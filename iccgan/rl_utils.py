@@ -13,7 +13,7 @@ HUMANOID_CONFIG = ArticulationCfg(
         usd_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd",        
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 2.0)),
+        pos=(0.0, 0.0, 1.5)),
     prim_path="/World/envs/env_.*/humanoid",
     actuators={
         "abdomen_x": ImplicitActuatorCfg(
@@ -224,7 +224,6 @@ class DiscriminatorBuffer:
         self.sequence_length = sequence_length
 
     def push(self, state, action, value, advantage, log_prob):
-        # Ensure 1D numpy arrays for consistent collation later
         def to_1d_array(x):
             arr = np.asarray(x)
             if arr.ndim == 0:
@@ -306,13 +305,12 @@ class DiscriminatorBufferGroup:
         - advantages: (B, sequence_length, 1)
         - log_probs: (B, sequence_length, 1)
         """
-        # Convert mask to numpy boolean array
+
         if torch.is_tensor(done_group):
             done_array = done_group.detach().cpu().numpy().astype(bool)
         else:
             done_array = np.array(done_group, dtype=bool)
 
-        # Select indices where done and buffer not empty
         candidate_indices = np.where(done_array)[0]
         if candidate_indices.size == 0:
             return (
@@ -339,22 +337,17 @@ class DiscriminatorBufferGroup:
             )
 
         samples_per_buffer = k // num_selected
-        if samples_per_buffer <= 0:
-            raise ValueError("Requested k is too small relative to number of selected buffers.")
-
-        # Sample from each selected buffer; each call returns 5 arrays of shape (k_i, T, F)
+        # (k_i, T, F)
         states_list, actions_list, values_list, advantages_list, log_probs_list = np.frompyfunc(
             lambda idx: self.buffers[int(idx)].sample(samples_per_buffer), 1, 5
         )(selected_indices)
 
-        # Concatenate along batch dimension
         states = np.concatenate(states_list.tolist(), axis=0)
         actions = np.concatenate(actions_list.tolist(), axis=0)
         values = np.concatenate(values_list.tolist(), axis=0)
         advantages = np.concatenate(advantages_list.tolist(), axis=0)
         log_probs = np.concatenate(log_probs_list.tolist(), axis=0)
 
-        # Convert to torch tensors (CPU, float32)
         return (
             torch.tensor(states, dtype=torch.float32),
             torch.tensor(actions, dtype=torch.float32),
