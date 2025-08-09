@@ -2,9 +2,7 @@ from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.sim import SimulationCfg
 import os
-import json
-from typing import Dict, List, Optional
-from quat_utils import quaternion_to_euler
+from typing import List
 from rl_utils import HUMANOID_CONFIG
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from gymnasium import spaces
@@ -15,16 +13,11 @@ import omni.kit.commands
 from isaacsim.core.utils.extensions import enable_extension
 from isaaclab.utils import configclass
 import torch
-import isaacsim.core.utils.articulations as articulations_utils
-import isaacsim.core.utils.prims as prims_utils
-import isaaclab.sim as sim_utils
-from isaaclab.sim import UsdFileCfg
-import omni.physics.tensors as tensors
+import torch.nn.functional as F
 import omni.kit.commands
 import omni.usd
 from pxr import UsdPhysics
 from reference_motion import ReferenceMotion
-from isaacsim.core.simulation_manager import SimulationManager
 
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
@@ -139,35 +132,29 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         if self.reference_motion is None:
             self.body_mapping = self._create_body_mapping()
             self.reference_motion = ReferenceMotion(self.motion_file, self.body_mapping)
+            # Parse reference frames once so sampling returns fixed-length sequences
+            self.reference_motion.parse_frames()
             self.contactable_links = self.reference_motion.contactable_links
             self.clip_length = torch.full((self.num_envs,), self.reference_motion.clip_length, device=self.device)
             self.is_cyclic = torch.full((self.num_envs,), 1 if self.reference_motion.is_cyclic else 0, dtype=torch.bool, device=self.device)
 
-        # Reset episode step counter for the specified environments
         self.episode_step[env_ids] = 0
         
-        # Call parent reset method first
         super()._reset_idx(env_ids)
         
-        # Get default joint states from the articulation
         joint_pos = self.humanoid.data.default_joint_pos[env_ids]
         joint_vel = self.humanoid.data.default_joint_vel[env_ids]
         
-        # Get default root state
         default_root_state = self.humanoid.data.default_root_state[env_ids].clone()
-        # Apply environment origins to root position
         default_root_state[:, :3] += self.scene.env_origins[env_ids].to(self.device)
         
-        # Write the reset states to simulation
         self.humanoid.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self.humanoid.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self.humanoid.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
     
     def _get_rewards(self) -> torch.Tensor:
-        """Get rewards from the environment."""
-        # TODO: Implement proper rewards
-        # For now, return zero rewards
+        # We handle rewards in the PPO class
         return torch.zeros(self.num_envs, device=self.device)
 
     def _apply_action(self):
@@ -191,39 +178,49 @@ class ICCGANHumanoidEnv(DirectRLEnv):
             'left_knee'
         ]
         
-        num_joints = self.humanoid.data.joint_pos_target.shape[1]  # total DOFs
+        num_joints = self.humanoid.data.joint_pos_target.shape[1]
         joint_targets = torch.zeros((self.num_envs, num_joints), device=self.device)
 
         action_idx = 0
         dof_idx = 0
 
-        # --- Spherical joints: convert 4D quaternion → 3D expmap ---
+        # Spherical joints: convert 4D quaternion to 3D expmap
         for _ in spherical_joint_groups:
             q = self.actions[:, action_idx:action_idx+4]   # (num_envs, 4)
             action_idx += 4
+            q = F.normalize(q, p=2, dim=1)
 
-            # Unpack quaternion; adjust ordering if yours is (x,y,z,w)
+            # Unpack quaternion as (w, x, y, z)
             qw = q[:, 0]
             qv = q[:, 1:]  # (num_envs, 3)
 
-            # Compute exponential map (axis-angle vector)
-            angle = 2.0 * torch.acos(qw.clamp(-1,1))             # (num_envs,)
-            sin_half = torch.sqrt((1 - qw*qw).clamp(min=1e-6))   # (num_envs,)
-            axis = qv / sin_half.unsqueeze(-1)                   # (num_envs,3)
+            sign = torch.where(qw < 0.0, -torch.ones_like(qw), torch.ones_like(qw))
+            qw = qw * sign
+            qv = qv * sign.unsqueeze(-1)
+
+            # Compute exponential map
+            angle = 2.0 * torch.acos(qw.clamp(-1.0, 1.0))            # in [0, π]
+            sin_half = torch.sqrt((1.0 - qw * qw).clamp(min=1e-12))  # (num_envs,)
+            axis = qv / sin_half.unsqueeze(-1)                       # (num_envs,3)
 
             expmap = axis * angle.unsqueeze(-1)                  # (num_envs,3)
 
-            # Fill in those 3 DOF slots
+            # Wrap to [-π, π]
+            expmap = ((expmap + torch.pi) % (2.0 * torch.pi)) - torch.pi
+            expmap = torch.where(torch.isfinite(expmap), expmap, torch.zeros_like(expmap))
+
             joint_targets[:, dof_idx:dof_idx+3] = expmap
             dof_idx += 3
 
-        # --- Revolute joints: 1D angle target directly ---
+        # Revolute joints: 1D angle target directly
         for _ in revolute_joints:
-            joint_targets[:, dof_idx] = self.actions[:, action_idx]
+            # Wrap to [-π, π]
+            angle = self.actions[:, action_idx]
+            wrapped = ((angle + torch.pi) % (2.0 * torch.pi)) - torch.pi
+            joint_targets[:, dof_idx] = torch.where(torch.isfinite(wrapped), wrapped, torch.zeros_like(wrapped))
             dof_idx += 1
             action_idx += 1
 
-        # Finally assign to the articulation buffer
         self.humanoid.data.joint_pos_target = joint_targets
 
     def _get_dones(self) -> dict:

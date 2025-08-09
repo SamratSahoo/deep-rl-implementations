@@ -224,22 +224,56 @@ class DiscriminatorBuffer:
         self.sequence_length = sequence_length
 
     def push(self, state, action, value, advantage, log_prob):
+        # Ensure 1D numpy arrays for consistent collation later
+        def to_1d_array(x):
+            arr = np.asarray(x)
+            if arr.ndim == 0:
+                return arr.reshape(1)
+            if arr.ndim > 1:
+                return arr.reshape(-1)
+            return arr
+
+        s = to_1d_array(state)
+        a = to_1d_array(action)
+        v = to_1d_array(value)
+        adv = to_1d_array(advantage)
+        lp = to_1d_array(log_prob)
+
+        # Append until we reach the desired sequence length
         if len(self.minibuffer) < self.sequence_length:
-            self.minibuffer.append((state, action, value, advantage, log_prob))
+            self.minibuffer.append((s, a, v, adv, lp))
         else:
-            self.buffer.append(self.minibuffer)
-            self.minibuffer = []
+            # Flush the completed sequence (as stacked arrays) and start a new one with current timestep
+            # Transpose steps -> fields and stack per field to shape (T, feat)
+            fields = list(zip(*self.minibuffer))  # 5 tuples, each length T
+            seq_states = np.stack(fields[0], axis=0)
+            seq_actions = np.stack(fields[1], axis=0)
+            seq_values = np.stack(fields[2], axis=0)
+            seq_advantages = np.stack(fields[3], axis=0)
+            seq_log_probs = np.stack(fields[4], axis=0)
+            self.buffer.append((seq_states, seq_actions, seq_values, seq_advantages, seq_log_probs))
+            self.minibuffer = [(s, a, v, adv, lp)]
 
     def clear_minibuffer(self):
         self.minibuffer = []
     
     def sample(self, k):
-        return random.choices(self.buffer, k=k)
+        """Return stacked arrays per field with shapes (k, T, feat)."""
+        choices = random.choices(self.buffer, k=k)
+        # Fast field-wise stacking without explicit for-loops over k
+        fields = list(zip(*choices))  # 5 tuples, each length k
+        states = np.stack(fields[0], axis=0)
+        actions = np.stack(fields[1], axis=0)
+        values = np.stack(fields[2], axis=0)
+        advantages = np.stack(fields[3], axis=0)
+        log_probs = np.stack(fields[4], axis=0)
+        return states, actions, values, advantages, log_probs
 
 class DiscriminatorBufferGroup:
     def __init__(self, count=2, capacity=10000, sequence_length=5):
         self.buffers = [DiscriminatorBuffer(capacity=capacity, sequence_length=sequence_length) for _ in range(count)]
         self.count = count
+        self.sequence_length = sequence_length
     
     def push(self, state_group, action_group, value_group, advantage_group, log_prob_group):
         states = np.array(state_group)
@@ -265,10 +299,12 @@ class DiscriminatorBufferGroup:
     
     def sample(self, k, done_group):
         """
-        Samples k samples from the buffers. The buffers are sampled based on the done_group.
-        The done_group is a tensor of boolean values, where True indicates which buffers we want to sample from.
-        Each buffer is sampled with a number of samples equal to (k // number) of True values in done_group.
-        This method should only use vectorized operations. No for loops or list comprehensions allowed
+        Samples k sequences from buffers indicated by done_group. Returns tensors of shape:
+        - states: (B, sequence_length, obs_dim)
+        - actions: (B, sequence_length, action_dim)
+        - values: (B, sequence_length, 1)
+        - advantages: (B, sequence_length, 1)
+        - log_probs: (B, sequence_length, 1)
         """
         # Convert mask to numpy boolean array
         if torch.is_tensor(done_group):
@@ -276,84 +312,56 @@ class DiscriminatorBufferGroup:
         else:
             done_array = np.array(done_group, dtype=bool)
 
-        selected_indices = np.where(done_array)[0]
-        # Filter out buffers with zero stored sequences
-        non_empty_mask = np.frompyfunc(lambda idx: len(self.buffers[int(idx)].buffer) > 0, 1, 1)(selected_indices)
-        if isinstance(non_empty_mask, np.ndarray):
-            non_empty_mask = non_empty_mask.astype(bool)
-        else:
-            non_empty_mask = np.array(non_empty_mask, dtype=bool)
-        selected_indices = selected_indices[non_empty_mask]
+        # Select indices where done and buffer not empty
+        candidate_indices = np.where(done_array)[0]
+        if candidate_indices.size == 0:
+            return (
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+            )
+
+        buffer_lengths = np.frompyfunc(lambda idx: len(self.buffers[int(idx)].buffer), 1, 1)(candidate_indices)
+        buffer_lengths = buffer_lengths.astype(int)
+        selected_mask = buffer_lengths > 0
+        selected_indices = candidate_indices[selected_mask]
         num_selected = int(selected_indices.shape[0])
 
         if num_selected == 0:
-            raise ValueError("No buffers selected by done_group to sample from.")
+            return (
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+                torch.empty(0, dtype=torch.float32),
+            )
 
         samples_per_buffer = k // num_selected
         if samples_per_buffer <= 0:
             raise ValueError("Requested k is too small relative to number of selected buffers.")
 
-        # Sample sequences from each selected buffer using vectorized ufunc
-        sampled_per_buffer = np.frompyfunc(
-            lambda idx: self.buffers[int(idx)].sample(samples_per_buffer), 1, 1
+        # Sample from each selected buffer; each call returns 5 arrays of shape (k_i, T, F)
+        states_list, actions_list, values_list, advantages_list, log_probs_list = np.frompyfunc(
+            lambda idx: self.buffers[int(idx)].sample(samples_per_buffer), 1, 5
         )(selected_indices)
 
-        # Convert each per-buffer list to a 1D object array and stack into a 2D matrix, then flatten
-        sampled_arrays = np.frompyfunc(lambda lst: np.array(lst, dtype=object), 1, 1)(sampled_per_buffer)
-        if sampled_arrays.size == 0:
-            raise ValueError("Sampling produced no sequences. Check buffer contents and k.")
-        samples_matrix = np.stack(sampled_arrays.tolist(), axis=0)  # shape: (num_selected, samples_per_buffer)
-        flat_samples = samples_matrix.reshape(-1)  # shape: (num_selected * samples_per_buffer,)
-        print(type(flat_samples[0]), flat_samples[0])
-        if flat_samples.size == 0:
-            raise ValueError("Sampling produced no sequences. Check buffer contents and k.")
-
-        # Helper to extract a stacked tensor for a specific field index from each sequence
-        def stack_field_from_sequence(sequence, field_index):
-            # Normalize to a list of timesteps
-            if isinstance(sequence, tuple) and len(sequence) == 5:
-                timesteps = [sequence]
-            elif isinstance(sequence, list):
-                timesteps = sequence
-            else:
-                arr = np.array(sequence, dtype=object)
-                if arr.ndim == 0:
-                    timesteps = [arr.item()]
-                else:
-                    timesteps = arr.tolist()
-
-            ts_arr = np.array(timesteps, dtype=object)
-            # Extract the specified field for each timestep; if an element isn't indexable, treat it as already the field
-            extractor = np.frompyfunc(
-                lambda ts: ts[field_index] if isinstance(ts, (tuple, list)) else ts,
-                1,
-                1,
-            )
-            field_values = extractor(ts_arr)
-            return np.stack(field_values.tolist(), axis=0)
-
-        # Vectorized extraction for all sequences
-        states_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 0), 1, 1)(flat_samples)
-        actions_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 1), 1, 1)(flat_samples)
-        values_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 2), 1, 1)(flat_samples)
-        advantages_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 3), 1, 1)(flat_samples)
-        log_probs_per_seq = np.frompyfunc(lambda s: stack_field_from_sequence(s, 4), 1, 1)(flat_samples)
-
-        # Stack across sequences to form final arrays
-        states = np.stack(states_per_seq.tolist(), axis=0)
-        actions = np.stack(actions_per_seq.tolist(), axis=0)
-        values = np.stack(values_per_seq.tolist(), axis=0)
-        advantages = np.stack(advantages_per_seq.tolist(), axis=0)
-        log_probs = np.stack(log_probs_per_seq.tolist(), axis=0)
+        # Concatenate along batch dimension
+        states = np.concatenate(states_list.tolist(), axis=0)
+        actions = np.concatenate(actions_list.tolist(), axis=0)
+        values = np.concatenate(values_list.tolist(), axis=0)
+        advantages = np.concatenate(advantages_list.tolist(), axis=0)
+        log_probs = np.concatenate(log_probs_list.tolist(), axis=0)
 
         # Convert to torch tensors (CPU, float32)
-        states_t = torch.tensor(states, dtype=torch.float32)
-        actions_t = torch.tensor(actions, dtype=torch.float32)
-        values_t = torch.tensor(values, dtype=torch.float32)
-        advantages_t = torch.tensor(advantages, dtype=torch.float32)
-        log_probs_t = torch.tensor(log_probs, dtype=torch.float32)
-
-        return states_t, actions_t, values_t, advantages_t, log_probs_t
+        return (
+            torch.tensor(states, dtype=torch.float32),
+            torch.tensor(actions, dtype=torch.float32),
+            torch.tensor(values, dtype=torch.float32),
+            torch.tensor(advantages, dtype=torch.float32),
+            torch.tensor(log_probs, dtype=torch.float32),
+        )
 
 class FeatureNormalizer:
     """Normalizes features using running mean and standard deviation."""
