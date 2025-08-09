@@ -56,7 +56,7 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
     ]
     """
     observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(195,))
-    sim: SimulationCfg = SimulationCfg(dt=1 / 240, render_interval=decimation)
+    sim: SimulationCfg = SimulationCfg(dt=1 / 30, render_interval=decimation)
     robot_cfg: ArticulationCfg = HUMANOID_CONFIG.replace(prim_path="/World/envs/env_.*/humanoid/pelvis")
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
@@ -290,14 +290,13 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         indices, _ = self.humanoid.find_bodies(link_names, preserve_order=True)
         return indices
 
-    def render(self, recompute: bool = False):
-        if not self.sim.has_rtx_sensors() and not recompute:
-            self.sim.render()
-
-        if self.render_mode == "rgb_array":
-            return self.get_rgb_frame().cpu().numpy()
-        else:
-            return super().render(recompute=recompute)
+    # def render(self, recompute: bool = True):
+    #     if self.render_mode == "rgb_array":
+    #         self.sim.render()
+    #         self.tiled_camera.update(dt=1 / 30, force_recompute=recompute) 
+    #         return self.get_rgb_frame().cpu().numpy()
+    #     else:
+    #         return super().render(recompute=recompute)
         
     def get_rgb_frame(self):
         rgb_data = self.tiled_camera.data.output["rgb"]
