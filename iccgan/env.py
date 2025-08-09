@@ -18,7 +18,11 @@ import omni.kit.commands
 import omni.usd
 from pxr import UsdPhysics
 from reference_motion import ReferenceMotion
-
+from isaaclab.sensors import TiledCameraCfg, TiledCamera
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+from isaaclab.sim.spawners.sensors import PinholeCameraCfg
+import isaacsim.core.utils.numpy.rotations as rot_utils
 @configclass
 class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
     decimation = 1
@@ -59,6 +63,17 @@ class ICCGANHumanoidEnvCfg(DirectRLEnvCfg):
         num_envs=2,
         env_spacing=4.0,
         replicate_physics=True
+    )
+
+    tiled_camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/Camera",
+        offset=TiledCameraCfg.OffsetCfg(pos=(-12.0, 0.0, 5.5), rot=(0.98007, 0.0, 0.19867, 0.0), convention="world"),
+        data_types=["rgb"],
+        spawn=PinholeCameraCfg(
+            focal_length=12.0, focus_distance=800.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
+        ),
+        width=1920,
+        height=1080,
     )
 
 
@@ -114,6 +129,8 @@ class ICCGANHumanoidEnv(DirectRLEnv):
 
         light_cfg = DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         spawn_light("/World/Light", light_cfg)
+
+        self.tiled_camera = TiledCamera(self.cfg.tiled_camera)
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = self.action_scale * actions.clone()
@@ -272,3 +289,16 @@ class ICCGANHumanoidEnv(DirectRLEnv):
         # Use the articulation's find_bodies method to get actual indices
         indices, _ = self.humanoid.find_bodies(link_names, preserve_order=True)
         return indices
+
+    def render(self, recompute: bool = False):
+        if not self.sim.has_rtx_sensors() and not recompute:
+            self.sim.render()
+
+        if self.render_mode == "rgb_array":
+            return self.get_rgb_frame().cpu().numpy()
+        else:
+            return super().render(recompute=recompute)
+        
+    def get_rgb_frame(self):
+        rgb_data = self.tiled_camera.data.output["rgb"]
+        return rgb_data[0]
