@@ -13,7 +13,7 @@ HUMANOID_CONFIG = ArticulationCfg(
         usd_path=f"{os.path.dirname(os.path.abspath(__file__))}/assets/humanoid.usd",        
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 1.5)),
+        pos=(0.0, 0.0, 1.75)),
     prim_path="/World/envs/env_.*/humanoid",
     actuators={
         "abdomen_x": ImplicitActuatorCfg(

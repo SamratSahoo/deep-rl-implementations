@@ -60,7 +60,7 @@ class PPO:
         discriminator_lr: float = 0.001,
         lambda_gp: float = 10,
         sequence_length: int = 5,
-        discriminator_batch_size: int = 64,
+        discriminator_batch_size: int = 256,
     ):
         self.batch_size = num_envs * num_steps
         self.minibatch_size = self.batch_size // num_minibatches
@@ -117,6 +117,8 @@ class PPO:
             num_discriminators=num_discriminators
         )
         self.discriminator.to(self.device)
+
+        assert discriminator_batch_size % self.num_envs == 0 and discriminator_batch_size >= self.num_envs, "discriminator_batch_size must be divisible by num_envs and greater than or equal to num_envs"
         self.discriminator_batch_size = discriminator_batch_size
         self.learning_rate = learning_rate
 
@@ -305,7 +307,7 @@ class PPO:
                         break
         self.env.close()
     def train_discriminator(self, next_done):
-        if next_done.sum() == 0:
+        if next_done.sum() == 0 or len(self.minibuffer) < self.sequence_length:
             return
         
         policy_data, _, _, _, _ = self.discriminator_buffer_group.sample(self.discriminator_batch_size, next_done)
