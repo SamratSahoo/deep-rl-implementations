@@ -313,18 +313,18 @@ class TransformerPPO:
                 next_obs, next_done = torch.tensor(next_obs, device=self.device), torch.tensor(next_done, device=self.device, dtype=torch.float32)
                 
                 reset_indices = torch.nonzero(next_done, as_tuple=True)[0]
+
+                if len(reset_indices):
+                    self.writer.add_scalar("evaluation/episodic_reward", torch.tensor(
+                            self.episodic_reward
+                        )[reset_indices.cpu()].mean(), self.global_step)
+
                 for i in reset_indices:
                     for ctx_state, ctx_action, ctx_next_state in zip(self.state_minibuffer, self.action_minibuffer, self.next_state_minibuffer):
                         ctx_state[i] = torch.zeros(np.prod(self.env.single_observation_space.shape))
                         ctx_action[i] = torch.zeros(np.prod(self.env.single_action_space.shape))
                         ctx_next_state[i] = torch.zeros(np.prod(self.env.single_observation_space.shape))
-
-                        self.writer.append("evaluation/episodic_reward", torch.tensor(
-                            self.episodic_reward
-                        )[reset_indices].mean())
-
                         self.episodic_reward[i] = 0
-                        self.env.num_envs[i].reset()
 
                 with torch.no_grad():
                     
